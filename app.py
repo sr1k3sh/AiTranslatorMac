@@ -1,9 +1,10 @@
 """
-TranslateAI — Live Japanese → English captions for macOS.
+TranslateAI — Live two-way Japanese ⇄ English captions for macOS.
 
 Listens to your microphone, streams the audio to the Gemini Live API
-(live-translate model), and shows the English translation as live captions
-in a simple desktop window.
+(live-translate model), and shows the translation as live captions in a
+simple desktop window. Use the direction button to switch between
+日本語 → English and English → 日本語.
 
 Run:
     python app.py
@@ -35,23 +36,33 @@ RECEIVE_SAMPLE_RATE = 24000   # Gemini sends back 24 kHz PCM audio
 CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
-TARGET_LANGUAGE = "en"        # translate everything we hear into English
+
+# Supported translation directions, as (source, target) language codes. The
+# live-translate model auto-detects the spoken language, so only the target
+# code actually drives the translation; the source is used for UI labels.
+LANGUAGE_NAMES = {"en": "English", "ja": "日本語"}
+DIRECTIONS = [("ja", "en"), ("en", "ja")]   # JA→EN first, EN→JA second
 
 pya = pyaudio.PyAudio()
 
 
-def build_config(play_audio: bool) -> types.LiveConnectConfig:
-    """Live API config: speak audio in, get English back.
+def direction_label(src: str, tgt: str) -> str:
+    """Human-readable arrow label, e.g. '日本語 → English'."""
+    return f"{LANGUAGE_NAMES[src]} → {LANGUAGE_NAMES[tgt]}"
+
+
+def build_config(play_audio: bool, target_language: str) -> types.LiveConnectConfig:
+    """Live API config: speak audio in, get the target language back.
 
     We always request AUDIO (what the live-translate model is built for) plus
-    output transcription, which gives us the English text for the captions.
+    output transcription, which gives us the translated text for the captions.
     """
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         translation_config=types.TranslationConfig(
-            target_language_code=TARGET_LANGUAGE,
+            target_language_code=target_language,
         ),
-        # Transcribe the model's English audio so we can render it as text.
+        # Transcribe the model's translated audio so we can render it as text.
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
@@ -65,11 +76,13 @@ class Translator:
     tuples onto a thread-safe queue that the Tk main loop drains.
     """
 
-    def __init__(self, api_key, events, mic_index=None, play_audio=False):
+    def __init__(self, api_key, events, mic_index=None, play_audio=False,
+                 target_language="en"):
         self.api_key = api_key
         self.events = events
         self.mic_index = mic_index
         self.play_audio = play_audio
+        self.target_language = target_language
 
         self._thread = None
         self._loop = None
@@ -114,7 +127,7 @@ class Translator:
             http_options={"api_version": "v1beta"},
             api_key=self.api_key,
         )
-        config = build_config(self.play_audio)
+        config = build_config(self.play_audio, self.target_language)
 
         try:
             async with (
@@ -263,13 +276,15 @@ class App:
         self.translator = None
         self.running = False
         self._needs_paragraph = False
+        self._dir_index = 0  # index into DIRECTIONS; 0 = JA→EN
 
-        root.title("TranslateAI — 日本語 → English")
+        root.title("TranslateAI")
         root.configure(bg=BG)
         root.geometry("760x560")
         root.minsize(560, 420)
 
         self._build_ui()
+        self._apply_direction()
         self._refresh_mics()
         self.root.after(60, self._drain_events)
 
@@ -277,8 +292,9 @@ class App:
         header = tk.Frame(self.root, bg=BG)
         header.pack(fill="x", padx=20, pady=(18, 8))
 
+        self.header_var = tk.StringVar(value="Live translation")
         tk.Label(
-            header, text="Live Japanese → English",
+            header, textvariable=self.header_var,
             bg=BG, fg=TEXT, font=("Helvetica Neue", 20, "bold"),
         ).pack(side="left")
 
@@ -301,6 +317,16 @@ class App:
         )
         self.mic_menu.pack(side="left", padx=(8, 8))
 
+        self.dir_var = tk.StringVar()
+        self.dir_btn = tk.Button(
+            controls, textvariable=self.dir_var, command=self._swap_direction,
+            bg=PANEL, fg=TEXT, activebackground="#222632",
+            activeforeground=TEXT, relief="flat",
+            font=("Helvetica Neue", 11), padx=12, pady=3,
+            highlightthickness=0, bd=0, cursor="pointinghand",
+        )
+        self.dir_btn.pack(side="left", padx=(0, 8))
+
         self.meet_btn = tk.Button(
             controls, text="🎧 Meet", command=self._select_meet_audio,
             bg=PANEL, fg=TEXT, activebackground="#222632",
@@ -311,12 +337,13 @@ class App:
         self.meet_btn.pack(side="left", padx=(0, 16))
 
         self.play_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            controls, text="Play English audio", variable=self.play_var,
+        self.play_check = tk.Checkbutton(
+            controls, text="Play translated audio", variable=self.play_var,
             bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
             activeforeground=TEXT, font=("Helvetica Neue", 11),
             highlightthickness=0, bd=0,
-        ).pack(side="left")
+        )
+        self.play_check.pack(side="left")
 
         self.toggle_btn = tk.Button(
             controls, text="Start", command=self._toggle,
@@ -389,6 +416,29 @@ class App:
                 error=True,
             )
 
+    def _current_direction(self):
+        return DIRECTIONS[self._dir_index]
+
+    def _apply_direction(self):
+        """Sync the window title, header and button to the current direction."""
+        src, tgt = self._current_direction()
+        label = direction_label(src, tgt)
+        self.header_var.set(f"Live {label}")
+        self.dir_var.set(label)
+        self.root.title(f"TranslateAI — {label}")
+
+    def _swap_direction(self):
+        """Flip the translation direction (JA→EN ⇄ EN→JA).
+
+        Switching mid-session would require restarting the Gemini connection,
+        so we only allow it while stopped.
+        """
+        if self.running:
+            self._set_status("Stop before switching direction", error=True)
+            return
+        self._dir_index = (self._dir_index + 1) % len(DIRECTIONS)
+        self._apply_direction()
+
     def _toggle(self):
         if self.running:
             self._stop()
@@ -402,16 +452,19 @@ class App:
             return
 
         self._needs_paragraph = False
+        _, target = self._current_direction()
         self.translator = Translator(
             api_key=api_key,
             events=self.events,
             mic_index=self._selected_mic_index(),
             play_audio=self.play_var.get(),
+            target_language=target,
         )
         self.translator.start()
         self.running = True
         self.toggle_btn.configure(text="Stop", bg="#e0564f",
                                   activebackground="#c8463f")
+        self.dir_btn.configure(state="disabled")
 
     def _stop(self):
         if self.translator is not None:
@@ -419,6 +472,7 @@ class App:
         self.running = False
         self.toggle_btn.configure(text="Start", bg=ACCENT,
                                   activebackground="#3d76e0")
+        self.dir_btn.configure(state="normal")
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)
