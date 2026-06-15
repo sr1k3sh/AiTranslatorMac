@@ -75,30 +75,46 @@ echo
 
 # --- Step 2: API key --------------------------------------------------------
 echo "${BOLD}Step 2/3 — Gemini API key${RESET}"
-echo "  Don't have one? Create a free key here:"
-echo "  ┌──────────────────────────────────────────────────┐"
-echo "  │  ${CYAN}${API_KEY_URL}${RESET}            │"
-echo "  └──────────────────────────────────────────────────┘"
-# Emit an OSC-8 clickable link in real terminals (skipped when piped/redirected).
-if [ -t 1 ]; then
-  printf '  \033]8;;%s\033\\%sOpen Google AI Studio →%s\033]8;;\033\\\n' \
-    "$API_KEY_URL" "$DIM" "$RESET"
-fi
-echo
 
-read -r -p "  Paste your GEMINI_API_KEY (or leave blank to enter it in-app): " API_KEY
-API_KEY="$(printf '%s' "$API_KEY" | tr -d '[:space:]')"
+# Prompt for (and export) a new key, showing where to get one.
+prompt_for_key() {
+  echo "  Don't have one? Create a free key here:"
+  echo "  ┌──────────────────────────────────────────────────┐"
+  echo "  │  ${CYAN}${API_KEY_URL}${RESET}            │"
+  echo "  └──────────────────────────────────────────────────┘"
+  # Emit an OSC-8 clickable link in real terminals (skipped when piped).
+  if [ -t 1 ]; then
+    printf '  \033]8;;%s\033\\%sOpen Google AI Studio →%s\033]8;;\033\\\n' \
+      "$API_KEY_URL" "$DIM" "$RESET"
+  fi
+  echo
 
-if [ -z "$API_KEY" ] && [ -n "${GEMINI_API_KEY:-}" ]; then
-  echo "${DIM}  Using the GEMINI_API_KEY already set in your environment.${RESET}"
-  API_KEY="$GEMINI_API_KEY"
-fi
+  local key
+  read -r -p "  Paste your GEMINI_API_KEY (or leave blank to enter it in-app): " key
+  key="$(printf '%s' "$key" | tr -d '[:space:]')"
+  if [ -n "$key" ]; then
+    export GEMINI_API_KEY="$key"
+    echo "${GREEN}✓ API key set for this session.${RESET}"
+  else
+    echo "${YELLOW}! No key provided — you can paste it into the app window later.${RESET}"
+  fi
+}
 
-if [ -n "$API_KEY" ]; then
-  export GEMINI_API_KEY="$API_KEY"
-  echo "${GREEN}✓ API key set for this session.${RESET}"
+# If a key is already in the environment, offer to skip this step.
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+  if [ "${#GEMINI_API_KEY}" -ge 8 ]; then
+    masked="${GEMINI_API_KEY:0:4}…${GEMINI_API_KEY: -4}"
+  else
+    masked="set"
+  fi
+  echo "  ${GREEN}A GEMINI_API_KEY is already set${RESET} (${masked})."
+  if ask_yn "  Use the existing key and skip this step?"; then
+    echo "${GREEN}✓ Using the existing API key.${RESET}"
+  else
+    prompt_for_key
+  fi
 else
-  echo "${YELLOW}! No key provided — you can paste it into the app window later.${RESET}"
+  prompt_for_key
 fi
 echo
 
