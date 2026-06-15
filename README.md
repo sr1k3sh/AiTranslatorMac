@@ -1,14 +1,16 @@
 # TranslateAI
 
-A simple macOS desktop app that listens to spoken **Japanese** through your
-microphone and shows the **English** translation as live on-screen captions,
+A simple macOS desktop app that listens to spoken **Japanese** or **English**
+through your microphone and shows the translation as live on-screen captions,
 powered by the Gemini Live API.
 
 ## What it does
 
 - Captures your mic audio and streams it to the Gemini live-translate model.
-- Displays the English translation as scrolling text in a window.
-- Optionally also plays the English translation as audio.
+- Translates in **both directions** — click the direction button to switch
+  between 日本語 → English and English → 日本語.
+- Displays the translation as scrolling text in a window.
+- Optionally also plays the translated audio.
 
 ## Setup
 
@@ -38,13 +40,29 @@ powered by the Gemini Live API.
 
 ## Run
 
+### Click to launch (no terminal)
+
+- **Double-click `launch.command`** in Finder. On first run it sets up the
+  virtual environment and installs dependencies automatically, then opens the
+  app. (You still need PortAudio — see the Setup step above.)
+- Prefer a real app icon? **Double-click `build_app.command`** once to generate
+  **`TranslateAI.app`**, which you can then launch from Finder, the Dock, or
+  Launchpad (drag it to Applications if you like).
+
+> macOS Gatekeeper may warn the first time because these scripts are
+> unsigned — right-click → **Open** to confirm.
+
+### From the terminal
+
 ```sh
 source .venv/bin/activate
 python app.py
 ```
 
-Pick your microphone, click **Start**, and speak (or play) Japanese audio.
-English captions appear in the window. Click **Stop** to end the session.
+Pick your microphone, choose a direction with the **日本語 → English** button
+(click it to flip to **English → 日本語**), then click **Start** and speak (or
+play) audio. Translated captions appear in the window. Click **Stop** to end
+the session — the direction can only be switched while stopped.
 
 ### Translating Google Meet (or any app audio)
 
@@ -63,5 +81,5 @@ The first run will trigger a macOS **microphone permission** prompt — allow it
 ## Notes
 
 - The app requests audio output from the model and transcribes it to text for
-  the captions. Tick **Play English audio** to also hear the translation.
+  the captions. Tick **Play translated audio** to also hear the translation.
 - Model: `models/gemini-3.5-live-translate-preview` (configurable in `app.py`).

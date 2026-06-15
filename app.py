@@ -1,9 +1,10 @@
 """
-TranslateAI — Live Japanese → English captions for macOS.
+TranslateAI — Live two-way Japanese ⇄ English captions for macOS.
 
 Listens to your microphone, streams the audio to the Gemini Live API
-(live-translate model), and shows the English translation as live captions
-in a simple desktop window.
+(live-translate model), and shows the translation as live captions in a
+simple desktop window. Use the direction button to switch between
+日本語 → English and English → 日本語.
 
 Run:
     python app.py
@@ -18,6 +19,7 @@ import threading
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
+import tkinter.font as tkfont
 
 import pyaudio
 import numpy as np
@@ -35,23 +37,33 @@ RECEIVE_SAMPLE_RATE = 24000   # Gemini sends back 24 kHz PCM audio
 CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
-TARGET_LANGUAGE = "en"        # translate everything we hear into English
+
+# Supported translation directions, as (source, target) language codes. The
+# live-translate model auto-detects the spoken language, so only the target
+# code actually drives the translation; the source is used for UI labels.
+LANGUAGE_NAMES = {"en": "English", "ja": "日本語"}
+DIRECTIONS = [("ja", "en"), ("en", "ja")]   # JA→EN first, EN→JA second
 
 pya = pyaudio.PyAudio()
 
 
-def build_config(play_audio: bool) -> types.LiveConnectConfig:
-    """Live API config: speak audio in, get English back.
+def direction_label(src: str, tgt: str) -> str:
+    """Human-readable arrow label, e.g. '日本語 → English'."""
+    return f"{LANGUAGE_NAMES[src]} → {LANGUAGE_NAMES[tgt]}"
+
+
+def build_config(play_audio: bool, target_language: str) -> types.LiveConnectConfig:
+    """Live API config: speak audio in, get the target language back.
 
     We always request AUDIO (what the live-translate model is built for) plus
-    output transcription, which gives us the English text for the captions.
+    output transcription, which gives us the translated text for the captions.
     """
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         translation_config=types.TranslationConfig(
-            target_language_code=TARGET_LANGUAGE,
+            target_language_code=target_language,
         ),
-        # Transcribe the model's English audio so we can render it as text.
+        # Transcribe the model's translated audio so we can render it as text.
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
@@ -65,11 +77,13 @@ class Translator:
     tuples onto a thread-safe queue that the Tk main loop drains.
     """
 
-    def __init__(self, api_key, events, mic_index=None, play_audio=False):
+    def __init__(self, api_key, events, mic_index=None, play_audio=False,
+                 target_language="en"):
         self.api_key = api_key
         self.events = events
         self.mic_index = mic_index
         self.play_audio = play_audio
+        self.target_language = target_language
 
         self._thread = None
         self._loop = None
@@ -114,7 +128,7 @@ class Translator:
             http_options={"api_version": "v1beta"},
             api_key=self.api_key,
         )
-        config = build_config(self.play_audio)
+        config = build_config(self.play_audio, self.target_language)
 
         try:
             async with (
@@ -251,9 +265,113 @@ class Translator:
 
 BG = "#0f1115"
 PANEL = "#171a21"
+PANEL_HOVER = "#222632"
 ACCENT = "#4f8cff"
+ACCENT_HOVER = "#3d76e0"
+DANGER = "#e0564f"
+DANGER_HOVER = "#c8463f"
 TEXT = "#e7e9ee"
 MUTED = "#8a91a0"
+DISABLED = "#3a3f4b"
+
+
+class RoundedButton(tk.Canvas):
+    """A flat, rounded button drawn on a Canvas.
+
+    macOS Aqua ignores ``bg``/``fg`` on a native ``tk.Button``, which makes
+    custom-coloured buttons render with invisible text. Drawing on a Canvas
+    sidesteps that entirely and gives us hover/disabled states for free.
+    """
+
+    def __init__(self, master, *, text="", textvariable=None, command=None,
+                 fill=PANEL, fg=TEXT, hover_fill=PANEL_HOVER, parent_bg=BG,
+                 font=("Helvetica Neue", 11), padx=16, pady=7, radius=11):
+        super().__init__(master, bg=parent_bg, highlightthickness=0, bd=0)
+        self._command = command
+        self._fill = fill
+        self._hover_fill = hover_fill
+        self._fg = fg
+        self._radius = radius
+        self._padx = padx
+        self._pady = pady
+        self._font = tkfont.Font(font=font)
+        self._enabled = True
+        self._hovered = False
+
+        self._textvariable = textvariable
+        self._text = textvariable.get() if textvariable is not None else text
+        if textvariable is not None:
+            textvariable.trace_add("write", self._on_var_change)
+
+        self.configure(cursor="pointinghand")
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self._resize_to_text()
+
+    # -- public API (mirrors the bits of tk.Button we use) --
+
+    def set_text(self, text):
+        self._text = text
+        self._resize_to_text()
+
+    def set_style(self, *, fill=None, hover_fill=None):
+        if fill is not None:
+            self._fill = fill
+        if hover_fill is not None:
+            self._hover_fill = hover_fill
+        self._redraw()
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        self.configure(cursor="pointinghand" if enabled else "arrow")
+        self._redraw()
+
+    # -- internals --
+
+    def _on_var_change(self, *_):
+        self.set_text(self._textvariable.get())
+
+    def _resize_to_text(self):
+        w = self._font.measure(self._text) + self._padx * 2
+        h = self._font.metrics("linespace") + self._pady * 2
+        self.configure(width=w, height=h)
+        self._redraw()
+
+    def _round_rect(self, x1, y1, x2, y2, r, **kw):
+        pts = [
+            x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+        ]
+        return self.create_polygon(pts, smooth=True, **kw)
+
+    def _redraw(self):
+        self.delete("all")
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        if not self._enabled:
+            fill, fg = PANEL, DISABLED
+        elif self._hovered:
+            fill, fg = self._hover_fill, self._fg
+        else:
+            fill, fg = self._fill, self._fg
+        self._round_rect(1, 1, w - 1, h - 1, self._radius, fill=fill, outline=fill)
+        self.create_text(w / 2, h / 2, text=self._text, fill=fg, font=self._font)
+
+    def _on_enter(self, _e):
+        self._hovered = True
+        self._redraw()
+
+    def _on_leave(self, _e):
+        self._hovered = False
+        self._redraw()
+
+    def _on_release(self, _e):
+        if self._enabled and self._command is not None:
+            self._command()
 
 
 class App:
@@ -263,23 +381,31 @@ class App:
         self.translator = None
         self.running = False
         self._needs_paragraph = False
+        self._dir_index = 0  # index into DIRECTIONS; 0 = JA→EN
 
-        root.title("TranslateAI — 日本語 → English")
+        root.title("TranslateAI")
         root.configure(bg=BG)
         root.geometry("760x560")
         root.minsize(560, 420)
 
         self._build_ui()
+        self._apply_direction()
         self._refresh_mics()
         self.root.after(60, self._drain_events)
 
     def _build_ui(self):
+        # Fonts kept as objects so we can rescale them on resize.
+        self.header_font = tkfont.Font(family="Helvetica Neue", size=20,
+                                       weight="bold")
+        self.caption_font = tkfont.Font(family="Helvetica Neue", size=18)
+
         header = tk.Frame(self.root, bg=BG)
         header.pack(fill="x", padx=20, pady=(18, 8))
 
+        self.header_var = tk.StringVar(value="Live translation")
         tk.Label(
-            header, text="Live Japanese → English",
-            bg=BG, fg=TEXT, font=("Helvetica Neue", 20, "bold"),
+            header, textvariable=self.header_var,
+            bg=BG, fg=TEXT, font=self.header_font,
         ).pack(side="left")
 
         self.status_var = tk.StringVar(value="Idle")
@@ -289,43 +415,43 @@ class App:
         )
         self.status_label.pack(side="right")
 
-        # Controls
-        controls = tk.Frame(self.root, bg=BG)
-        controls.pack(fill="x", padx=20, pady=(4, 8))
+        # Controls — laid out with grid so they can reflow responsively.
+        self.controls = tk.Frame(self.root, bg=BG)
+        self.controls.pack(fill="x", padx=20, pady=(4, 8))
 
-        tk.Label(controls, text="Mic", bg=BG, fg=MUTED,
-                 font=("Helvetica Neue", 11)).pack(side="left")
+        self.mic_label = tk.Label(self.controls, text="Mic", bg=BG, fg=MUTED,
+                                  font=("Helvetica Neue", 11))
         self.mic_var = tk.StringVar()
         self.mic_menu = ttk.Combobox(
-            controls, textvariable=self.mic_var, state="readonly", width=34
+            self.controls, textvariable=self.mic_var, state="readonly", width=24
         )
-        self.mic_menu.pack(side="left", padx=(8, 8))
 
-        self.meet_btn = tk.Button(
-            controls, text="🎧 Meet", command=self._select_meet_audio,
-            bg=PANEL, fg=TEXT, activebackground="#222632",
-            activeforeground=TEXT, relief="flat",
-            font=("Helvetica Neue", 11), padx=12, pady=3,
-            highlightthickness=0, bd=0, cursor="pointinghand",
+        self.dir_var = tk.StringVar()
+        self.dir_btn = RoundedButton(
+            self.controls, textvariable=self.dir_var,
+            command=self._swap_direction, fill=PANEL, hover_fill=PANEL_HOVER,
         )
-        self.meet_btn.pack(side="left", padx=(0, 16))
+        self.meet_btn = RoundedButton(
+            self.controls, text="🎧 Meet", command=self._select_meet_audio,
+            fill=PANEL, hover_fill=PANEL_HOVER,
+        )
 
         self.play_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            controls, text="Play English audio", variable=self.play_var,
+        self.play_check = tk.Checkbutton(
+            self.controls, text="Play translated audio", variable=self.play_var,
             bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
             activeforeground=TEXT, font=("Helvetica Neue", 11),
             highlightthickness=0, bd=0,
-        ).pack(side="left")
-
-        self.toggle_btn = tk.Button(
-            controls, text="Start", command=self._toggle,
-            bg=ACCENT, fg="white", activebackground="#3d76e0",
-            activeforeground="white", relief="flat",
-            font=("Helvetica Neue", 13, "bold"), padx=22, pady=4,
-            highlightthickness=0, bd=0, cursor="pointinghand",
         )
-        self.toggle_btn.pack(side="right")
+
+        self.toggle_btn = RoundedButton(
+            self.controls, text="Start", command=self._toggle,
+            fill=ACCENT, hover_fill=ACCENT_HOVER, fg="white",
+            font=("Helvetica Neue", 13, "bold"), padx=24, pady=7,
+        )
+
+        self._controls_wide = None
+        self._layout_controls(wide=True)
 
         # API key row (shown only if env var is missing)
         self.api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -346,10 +472,53 @@ class App:
         self.caption = scrolledtext.ScrolledText(
             self.root, wrap="word", bg=PANEL, fg=TEXT,
             insertbackground=TEXT, relief="flat",
-            font=("Helvetica Neue", 18), padx=16, pady=16, spacing3=8,
+            font=self.caption_font, padx=16, pady=16, spacing3=8,
         )
         self.caption.pack(fill="both", expand=True, padx=20, pady=(4, 20))
         self.caption.configure(state="disabled")
+
+        # Drive responsive reflow + font scaling off the window size.
+        self.root.bind("<Configure>", self._on_resize)
+
+    def _layout_controls(self, wide):
+        """Single row when wide; two rows (mic on top) when narrow."""
+        if wide == self._controls_wide:
+            return
+        self._controls_wide = wide
+        c = self.controls
+        for w in (self.mic_label, self.mic_menu, self.dir_btn,
+                  self.meet_btn, self.play_check, self.toggle_btn):
+            w.grid_forget()
+        for col in range(6):
+            c.grid_columnconfigure(col, weight=0)
+
+        if wide:
+            self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
+            self.mic_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
+            self.dir_btn.grid(row=0, column=2, padx=(0, 8), pady=4)
+            self.meet_btn.grid(row=0, column=3, padx=(0, 16), pady=4)
+            self.play_check.grid(row=0, column=4, padx=(0, 12), pady=4, sticky="w")
+            self.toggle_btn.grid(row=0, column=5, pady=4, sticky="e")
+            c.grid_columnconfigure(1, weight=1)
+        else:
+            self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=(4, 8), sticky="w")
+            self.mic_menu.grid(row=0, column=1, columnspan=3, pady=(4, 8), sticky="ew")
+            self.dir_btn.grid(row=1, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.meet_btn.grid(row=1, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.play_check.grid(row=1, column=2, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.toggle_btn.grid(row=1, column=3, pady=(0, 4), sticky="e")
+            c.grid_columnconfigure(1, weight=1)
+            c.grid_columnconfigure(3, weight=1)
+
+    def _on_resize(self, event):
+        if event.widget is not self.root:
+            return
+        width = event.width
+        self._layout_controls(wide=width >= 720)
+        # Scale caption + header type to the window width (clamped).
+        span = max(0.0, min(1.0, (width - 560) / (1100 - 560)))
+        self.caption_font.configure(size=int(round(15 + span * 8)))   # 15–23
+        self.header_font.configure(size=int(round(17 + span * 7)))    # 17–24
 
     def _refresh_mics(self):
         self.mics = []  # list of (label, index)
@@ -389,6 +558,29 @@ class App:
                 error=True,
             )
 
+    def _current_direction(self):
+        return DIRECTIONS[self._dir_index]
+
+    def _apply_direction(self):
+        """Sync the window title, header and button to the current direction."""
+        src, tgt = self._current_direction()
+        label = direction_label(src, tgt)
+        self.header_var.set(f"Live {label}")
+        self.dir_var.set(label)
+        self.root.title(f"TranslateAI — {label}")
+
+    def _swap_direction(self):
+        """Flip the translation direction (JA→EN ⇄ EN→JA).
+
+        Switching mid-session would require restarting the Gemini connection,
+        so we only allow it while stopped.
+        """
+        if self.running:
+            self._set_status("Stop before switching direction", error=True)
+            return
+        self._dir_index = (self._dir_index + 1) % len(DIRECTIONS)
+        self._apply_direction()
+
     def _toggle(self):
         if self.running:
             self._stop()
@@ -402,23 +594,27 @@ class App:
             return
 
         self._needs_paragraph = False
+        _, target = self._current_direction()
         self.translator = Translator(
             api_key=api_key,
             events=self.events,
             mic_index=self._selected_mic_index(),
             play_audio=self.play_var.get(),
+            target_language=target,
         )
         self.translator.start()
         self.running = True
-        self.toggle_btn.configure(text="Stop", bg="#e0564f",
-                                  activebackground="#c8463f")
+        self.toggle_btn.set_text("Stop")
+        self.toggle_btn.set_style(fill=DANGER, hover_fill=DANGER_HOVER)
+        self.dir_btn.set_enabled(False)
 
     def _stop(self):
         if self.translator is not None:
             self.translator.stop()
         self.running = False
-        self.toggle_btn.configure(text="Start", bg=ACCENT,
-                                  activebackground="#3d76e0")
+        self.toggle_btn.set_text("Start")
+        self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
+        self.dir_btn.set_enabled(True)
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)

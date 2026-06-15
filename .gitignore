@@ -10,5 +10,8 @@ venv/
 # macOS
 .DS_Store
 
+# Generated app bundle (built by build_app.command)
+TranslateAI.app/
+
 # Environment
 .env
