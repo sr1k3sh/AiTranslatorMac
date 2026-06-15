@@ -38,6 +38,7 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
 TEXT_MODEL = "gemini-2.5-flash"   # used by the Quick Translate (text) tab
+QUICK_DEBOUNCE_MS = 700           # idle delay before auto-translating typed text
 
 # Languages offered for both input and output, as code -> display label. The
 # live-translate model auto-detects the spoken language, so the *output* choice
@@ -420,6 +421,12 @@ class App:
         self._trans_needs_para = False
         self._transcript_wide = None
 
+        # Quick Translate: debounce timer + a sequence guard so a slow earlier
+        # request can't overwrite a newer translation.
+        self._quick_after_id = None
+        self._quick_seq = 0
+        self._quick_last = None
+
         root.title("TranslateAI")
         root.configure(bg=BG)
         root.geometry("760x560")
@@ -574,17 +581,28 @@ class App:
         tk.Label(row, text="From", bg=BG, fg=MUTED,
                  font=("Helvetica Neue", 11)).pack(side="left")
         self.q_input_var = tk.StringVar(value=LANGUAGES[DEFAULT_INPUT])
-        ttk.Combobox(row, textvariable=self.q_input_var, values=labels,
-                     state="readonly", width=16).pack(side="left", padx=(8, 8))
+        self.q_input_menu = ttk.Combobox(
+            row, textvariable=self.q_input_var, values=labels,
+            state="readonly", width=16)
+        self.q_input_menu.pack(side="left", padx=(8, 8))
+        self.q_input_menu.bind("<<ComboboxSelected>>", self._quick_schedule)
 
-        tk.Label(row, text="→", bg=BG, fg=TEXT,
-                 font=("Helvetica Neue", 14, "bold")).pack(side="left")
+        # Clickable swap: flip the From/To languages and the text.
+        self.q_swap_btn = RoundedButton(
+            row, text="⇄", command=self._quick_swap,
+            fill=PANEL, hover_fill=PANEL_HOVER,
+            font=("Helvetica Neue", 14, "bold"), padx=12, pady=5,
+        )
+        self.q_swap_btn.pack(side="left", padx=(2, 2))
 
         tk.Label(row, text="To", bg=BG, fg=MUTED,
                  font=("Helvetica Neue", 11)).pack(side="left", padx=(8, 0))
         self.q_output_var = tk.StringVar(value=LANGUAGES[DEFAULT_OUTPUT])
-        ttk.Combobox(row, textvariable=self.q_output_var, values=labels,
-                     state="readonly", width=16).pack(side="left", padx=(8, 0))
+        self.q_output_menu = ttk.Combobox(
+            row, textvariable=self.q_output_var, values=labels,
+            state="readonly", width=16)
+        self.q_output_menu.pack(side="left", padx=(8, 0))
+        self.q_output_menu.bind("<<ComboboxSelected>>", self._quick_schedule)
 
         self.q_translate_btn = RoundedButton(
             row, text="Translate", command=self._quick_translate,
@@ -599,6 +617,9 @@ class App:
 
         self.q_in_panel, self.q_input_text, in_actions = self._build_quick_panel(
             "Type or paste text", editable=True)
+        # Translate automatically a short moment after typing/pasting stops.
+        self.q_input_text.bind("<KeyRelease>", self._quick_schedule)
+        self.q_input_text.bind("<<Paste>>", self._quick_schedule)
         RoundedButton(in_actions, text="Paste", command=self._quick_paste,
                       fill=PANEL, hover_fill=PANEL_HOVER).pack(side="right")
         RoundedButton(in_actions, text="Clear", command=self._quick_clear,
@@ -820,39 +841,89 @@ class App:
     def _resolve_key(self):
         return self.api_key or (self.key_var.get().strip() if self.key_var else "")
 
-    def _quick_translate(self):
+    def _set_quick_output(self, text):
+        self.q_output_text.configure(state="normal")
+        self.q_output_text.delete("1.0", "end")
+        self.q_output_text.insert("end", text)
+        self.q_output_text.configure(state="disabled")
+
+    def _quick_schedule(self, _event=None):
+        """Debounce: (re)arm an auto-translate a short moment after input stops."""
+        if self._quick_after_id is not None:
+            self.root.after_cancel(self._quick_after_id)
+        self._quick_after_id = self.root.after(QUICK_DEBOUNCE_MS, self._quick_auto)
+
+    def _quick_auto(self):
+        self._quick_after_id = None
+        self._quick_translate(auto=True)
+
+    def _quick_swap(self):
+        """Flip From/To and swap the text between the two panels."""
+        in_text = self.q_input_text.get("1.0", "end").strip()
+        out_text = self.q_output_text.get("1.0", "end").strip()
+
+        # Flip the language selections.
+        from_lang, to_lang = self.q_input_var.get(), self.q_output_var.get()
+        self.q_input_var.set(to_lang)
+        self.q_output_var.set(from_lang)
+
+        if out_text:
+            # The current translation is already the source text in the new
+            # "From" language, and the old source is its translation in the new
+            # "To" language — so we can swap both in place, no API call needed.
+            self.q_input_text.delete("1.0", "end")
+            self.q_input_text.insert("end", out_text)
+            self._set_quick_output(in_text)
+            self._quick_last = out_text
+            self._q_status("Swapped")
+        else:
+            # Nothing translated yet — just re-run with the languages flipped.
+            self._quick_last = None
+            self._quick_schedule()
+
+    def _quick_translate(self, auto=False):
         text = self.q_input_text.get("1.0", "end").strip()
         if not text:
-            self._q_status("Type or paste some text first", error=True)
+            self._set_quick_output("")
+            self._quick_last = None
+            self._q_status("" if auto else "Type or paste some text first",
+                           error=not auto)
             return
         api_key = self._resolve_key()
         if not api_key:
             self._q_status("Set GEMINI_API_KEY first", error=True)
             return
+        # Skip if this exact text was already translated (avoids redundant calls
+        # while typing); a manual click always re-runs.
+        if auto and text == self._quick_last:
+            return
 
         source = code_for_label(self.q_input_var.get())
         target = code_for_label(self.q_output_var.get())
+        self._quick_seq += 1
+        seq = self._quick_seq
         self.q_translate_btn.set_enabled(False)
         self._q_status("Translating…")
 
         def work():
             try:
                 result = translate_text(api_key, text, source, target)
-                self.events.put(("quick_result", result))
+                self.events.put(("quick_result", (seq, text, result)))
             except Exception as exc:  # surface API/network errors in the UI
-                self.events.put(("quick_error", str(exc)))
+                self.events.put(("quick_error", (seq, str(exc))))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _quick_done(self, result, error):
+    def _quick_done(self, seq, result, error, source_text=None):
+        # Ignore results from a request that a newer one has superseded.
+        if seq != self._quick_seq:
+            return
         self.q_translate_btn.set_enabled(True)
         if error is not None:
             self._q_status(f"Error: {error}", error=True)
             return
-        self.q_output_text.configure(state="normal")
-        self.q_output_text.delete("1.0", "end")
-        self.q_output_text.insert("end", result or "")
-        self.q_output_text.configure(state="disabled")
+        self._set_quick_output(result or "")
+        self._quick_last = source_text
         self._q_status("Done")
 
     def _quick_copy(self):
@@ -872,14 +943,17 @@ class App:
         if clip:
             self.q_input_text.insert("insert", clip)
             self._q_status("Pasted from clipboard")
+            self._quick_schedule()
         else:
             self._q_status("Clipboard is empty", error=True)
 
     def _quick_clear(self):
+        if self._quick_after_id is not None:
+            self.root.after_cancel(self._quick_after_id)
+            self._quick_after_id = None
         self.q_input_text.delete("1.0", "end")
-        self.q_output_text.configure(state="normal")
-        self.q_output_text.delete("1.0", "end")
-        self.q_output_text.configure(state="disabled")
+        self._set_quick_output("")
+        self._quick_last = None
         self._q_status("")
 
     def _toggle(self):
@@ -951,9 +1025,11 @@ class App:
                     self._set_status(f"Error: {payload}", error=True)
                     self._stop()
                 elif kind == "quick_result":
-                    self._quick_done(payload, None)
+                    seq, src, result = payload
+                    self._quick_done(seq, result, None, src)
                 elif kind == "quick_error":
-                    self._quick_done(None, payload)
+                    seq, msg = payload
+                    self._quick_done(seq, None, msg)
         except queue.Empty:
             pass
         self.root.after(60, self._drain_events)
