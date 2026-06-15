@@ -587,8 +587,13 @@ class App:
         self.q_input_menu.pack(side="left", padx=(8, 8))
         self.q_input_menu.bind("<<ComboboxSelected>>", self._quick_schedule)
 
-        tk.Label(row, text="→", bg=BG, fg=TEXT,
-                 font=("Helvetica Neue", 14, "bold")).pack(side="left")
+        # Clickable swap: flip the From/To languages and the text.
+        self.q_swap_btn = RoundedButton(
+            row, text="⇄", command=self._quick_swap,
+            fill=PANEL, hover_fill=PANEL_HOVER,
+            font=("Helvetica Neue", 14, "bold"), padx=12, pady=5,
+        )
+        self.q_swap_btn.pack(side="left", padx=(2, 2))
 
         tk.Label(row, text="To", bg=BG, fg=MUTED,
                  font=("Helvetica Neue", 11)).pack(side="left", padx=(8, 0))
@@ -851,6 +856,30 @@ class App:
     def _quick_auto(self):
         self._quick_after_id = None
         self._quick_translate(auto=True)
+
+    def _quick_swap(self):
+        """Flip From/To and swap the text between the two panels."""
+        in_text = self.q_input_text.get("1.0", "end").strip()
+        out_text = self.q_output_text.get("1.0", "end").strip()
+
+        # Flip the language selections.
+        from_lang, to_lang = self.q_input_var.get(), self.q_output_var.get()
+        self.q_input_var.set(to_lang)
+        self.q_output_var.set(from_lang)
+
+        if out_text:
+            # The current translation is already the source text in the new
+            # "From" language, and the old source is its translation in the new
+            # "To" language — so we can swap both in place, no API call needed.
+            self.q_input_text.delete("1.0", "end")
+            self.q_input_text.insert("end", out_text)
+            self._set_quick_output(in_text)
+            self._quick_last = out_text
+            self._q_status("Swapped")
+        else:
+            # Nothing translated yet — just re-run with the languages flipped.
+            self._quick_last = None
+            self._quick_schedule()
 
     def _quick_translate(self, auto=False):
         text = self.q_input_text.get("1.0", "end").strip()

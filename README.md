@@ -24,6 +24,8 @@ Two tabs:
 - Type or **paste** text on the left and the translation appears on the right
   **automatically** — it translates shortly after you stop typing (no need to
   click anything). Changing the From/To languages re-translates too.
+- The **⇄** button between the language menus swaps From/To and the text, so
+  you can flip the direction in one click.
 - The **Translate** button is still there if you want to force it immediately.
 - **Copy** puts the translation on your clipboard; **Clear** empties both sides.
 
