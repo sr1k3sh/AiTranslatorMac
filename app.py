@@ -72,14 +72,17 @@ def build_config(play_audio: bool, target_language: str) -> types.LiveConnectCon
     """Live API config: speak audio in, get the target language back.
 
     We always request AUDIO (what the live-translate model is built for) plus
-    output transcription, which gives us the translated text for the captions.
+    both transcriptions: the input transcription is the original speech, and
+    the output transcription is the translated text.
     """
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         translation_config=types.TranslationConfig(
             target_language_code=target_language,
         ),
-        # Transcribe the model's translated audio so we can render it as text.
+        # Transcribe the user's speech (original) and the model's translated
+        # audio so we can render both side by side.
+        input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
 
@@ -89,8 +92,9 @@ def build_config(play_audio: bool, target_language: str) -> types.LiveConnectCon
 class Translator:
     """Runs the Gemini Live session on its own asyncio thread.
 
-    UI updates are pushed as ("status"|"caption"|"turn_end"|"error", payload)
-    tuples onto a thread-safe queue that the Tk main loop drains.
+    UI updates are pushed as
+    ("status"|"original"|"translated"|"turn_end"|"error", payload) tuples onto
+    a thread-safe queue that the Tk main loop drains.
     """
 
     def __init__(self, api_key, events, mic_index=None, play_audio=False,
@@ -238,14 +242,17 @@ class Translator:
             async for response in turn:
                 sc = response.server_content
                 if sc is not None:
-                    transcript = sc.output_transcription
-                    if transcript is not None and transcript.text:
-                        self._emit("caption", transcript.text)
+                    original = sc.input_transcription
+                    if original is not None and original.text:
+                        self._emit("original", original.text)
+                    translated = sc.output_transcription
+                    if translated is not None and translated.text:
+                        self._emit("translated", translated.text)
                     if sc.turn_complete:
                         self._emit("turn_end")
                 # Fallback for TEXT-modality responses.
                 if response.text:
-                    self._emit("caption", response.text)
+                    self._emit("translated", response.text)
                 if self.play_audio and response.data:
                     self.audio_in_queue.put_nowait(response.data)
 
@@ -396,7 +403,9 @@ class App:
         self.events = queue.Queue()
         self.translator = None
         self.running = False
-        self._needs_paragraph = False
+        self._orig_needs_para = False
+        self._trans_needs_para = False
+        self._transcript_wide = None
 
         root.title("TranslateAI")
         root.configure(bg=BG)
@@ -511,14 +520,51 @@ class App:
         else:
             self.key_var = None
 
-        # Captions
-        self.caption = scrolledtext.ScrolledText(
-            self.root, wrap="word", bg=PANEL, fg=TEXT,
+        # Transcript — original (left) and translation (right), side by side.
+        self.transcript = tk.Frame(self.root, bg=BG)
+        self.transcript.pack(fill="both", expand=True, padx=20, pady=(4, 20))
+        self.orig_panel, self.orig_text = self._build_panel("Original")
+        self.trans_panel, self.trans_text = self._build_panel("Translation")
+        self._layout_transcript(wide=True)
+
+    def _build_panel(self, title):
+        """A titled, read-only scrolling text panel for the transcript view."""
+        panel = tk.Frame(self.transcript, bg=BG)
+        tk.Label(panel, text=title, bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11, "bold")).pack(anchor="w", pady=(0, 4))
+        text = scrolledtext.ScrolledText(
+            panel, wrap="word", bg=PANEL, fg=TEXT,
             insertbackground=TEXT, relief="flat",
-            font=self.caption_font, padx=16, pady=16, spacing3=8,
+            font=self.caption_font, padx=14, pady=14, spacing3=8,
         )
-        self.caption.pack(fill="both", expand=True, padx=20, pady=(4, 20))
-        self.caption.configure(state="disabled")
+        text.pack(fill="both", expand=True)
+        text.configure(state="disabled")
+        return panel, text
+
+    def _layout_transcript(self, wide):
+        """Side by side when wide; stacked (original on top) when narrow."""
+        if wide == self._transcript_wide:
+            return
+        self._transcript_wide = wide
+        t = self.transcript
+        self.orig_panel.grid_forget()
+        self.trans_panel.grid_forget()
+        for i in range(2):
+            t.grid_rowconfigure(i, weight=0)
+            t.grid_columnconfigure(i, weight=0)
+
+        if wide:
+            self.orig_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+            self.trans_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+            t.grid_rowconfigure(0, weight=1)
+            t.grid_columnconfigure(0, weight=1)
+            t.grid_columnconfigure(1, weight=1)
+        else:
+            self.orig_panel.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+            self.trans_panel.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+            t.grid_columnconfigure(0, weight=1)
+            t.grid_rowconfigure(0, weight=1)
+            t.grid_rowconfigure(1, weight=1)
 
         # Drive responsive reflow + font scaling off the window size.
         self.root.bind("<Configure>", self._on_resize)
@@ -558,6 +604,8 @@ class App:
             return
         width = event.width
         self._layout_controls(wide=width >= 720)
+        # Two side-by-side panels need room; stack them below this width.
+        self._layout_transcript(wide=width >= 720)
         # Scale caption + header type to the window width (clamped).
         span = max(0.0, min(1.0, (width - 560) / (1100 - 560)))
         self.caption_font.configure(size=int(round(15 + span * 8)))   # 15–23
@@ -621,11 +669,13 @@ class App:
         self._apply_languages()
 
     def _clear_captions(self):
-        """Wipe the caption area."""
-        self.caption.configure(state="normal")
-        self.caption.delete("1.0", "end")
-        self.caption.configure(state="disabled")
-        self._needs_paragraph = False
+        """Wipe both transcript panels."""
+        for widget in (self.orig_text, self.trans_text):
+            widget.configure(state="normal")
+            widget.delete("1.0", "end")
+            widget.configure(state="disabled")
+        self._orig_needs_para = False
+        self._trans_needs_para = False
 
     def _toggle(self):
         if self.running:
@@ -639,7 +689,8 @@ class App:
             self._set_status("Set GEMINI_API_KEY first", error=True)
             return
 
-        self._needs_paragraph = False
+        self._orig_needs_para = False
+        self._trans_needs_para = False
         self.translator = Translator(
             api_key=api_key,
             events=self.events,
@@ -667,14 +718,14 @@ class App:
         self.status_var.set(text)
         self.status_label.configure(fg="#e0564f" if error else MUTED)
 
-    def _append_caption(self, text):
-        self.caption.configure(state="normal")
-        if self._needs_paragraph:
-            self.caption.insert("end", "\n\n")
-            self._needs_paragraph = False
-        self.caption.insert("end", text)
-        self.caption.see("end")
-        self.caption.configure(state="disabled")
+    def _append(self, widget, text, para_attr):
+        widget.configure(state="normal")
+        if getattr(self, para_attr):
+            widget.insert("end", "\n\n")
+            setattr(self, para_attr, False)
+        widget.insert("end", text)
+        widget.see("end")
+        widget.configure(state="disabled")
 
     def _drain_events(self):
         try:
@@ -684,10 +735,13 @@ class App:
                     self._set_status(payload)
                     if payload == "Stopped":
                         self._stop()
-                elif kind == "caption":
-                    self._append_caption(payload)
+                elif kind == "original":
+                    self._append(self.orig_text, payload, "_orig_needs_para")
+                elif kind == "translated":
+                    self._append(self.trans_text, payload, "_trans_needs_para")
                 elif kind == "turn_end":
-                    self._needs_paragraph = True
+                    self._orig_needs_para = True
+                    self._trans_needs_para = True
                 elif kind == "error":
                     self._set_status(f"Error: {payload}", error=True)
                     self._stop()
