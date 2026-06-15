@@ -6,6 +6,10 @@ the Gemini Live API.
 
 ## What it does
 
+Two tabs:
+
+### Live (speech)
+
 - Captures your mic audio and streams it to the Gemini live-translate model.
 - **Pick input and output languages** from the menus — English, 日本語
   (Japanese), नेपाली (Nepali), Español (Spanish), and 中文 (Chinese).
@@ -14,6 +18,12 @@ the Gemini Live API.
   the translation on the right (they stack vertically on a narrow window).
   **Clear** wipes both panels.
 - Optionally also plays the translated audio.
+
+### Quick Translate (text)
+
+- Type or **paste** text on the left, pick the From/To languages, and click
+  **Translate** to see the result on the right.
+- **Copy** puts the translation on your clipboard; **Clear** empties both sides.
 
 ## Setup
 

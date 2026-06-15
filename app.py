@@ -37,6 +37,7 @@ RECEIVE_SAMPLE_RATE = 24000   # Gemini sends back 24 kHz PCM audio
 CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
+TEXT_MODEL = "gemini-2.5-flash"   # used by the Quick Translate (text) tab
 
 # Languages offered for both input and output, as code -> display label. The
 # live-translate model auto-detects the spoken language, so the *output* choice
@@ -85,6 +86,18 @@ def build_config(play_audio: bool, target_language: str) -> types.LiveConnectCon
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
     )
+
+
+def translate_text(api_key: str, text: str, source: str, target: str) -> str:
+    """One-shot text translation via the Gemini text model (Quick Translate)."""
+    client = genai.Client(api_key=api_key)
+    prompt = (
+        f"Translate the following text from {lang_name(source)} to "
+        f"{lang_name(target)}. Return only the translation, with no quotes, "
+        f"notes, or extra commentary.\n\n{text}"
+    )
+    response = client.models.generate_content(model=TEXT_MODEL, contents=prompt)
+    return (response.text or "").strip()
 
 
 # --- Backend: streams mic -> Gemini -> caption events -----------------------
@@ -423,8 +436,46 @@ class App:
                                        weight="bold")
         self.caption_font = tkfont.Font(family="Helvetica Neue", size=18)
 
-        header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=20, pady=(18, 8))
+        # Shared API key — env var, or a field shown when it's missing.
+        self.api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not self.api_key:
+            key_row = tk.Frame(self.root, bg=BG)
+            key_row.pack(fill="x", padx=20, pady=(12, 4))
+            tk.Label(key_row, text="GEMINI_API_KEY", bg=BG, fg=MUTED,
+                     font=("Helvetica Neue", 11)).pack(side="left")
+            self.key_var = tk.StringVar()
+            tk.Entry(key_row, textvariable=self.key_var, show="•",
+                     bg=PANEL, fg=TEXT, insertbackground=TEXT, relief="flat",
+                     font=("Helvetica Neue", 11)).pack(
+                side="left", fill="x", expand=True, padx=(8, 0))
+        else:
+            self.key_var = None
+
+        # Two tabs: Live (audio) and Quick Translate (text).
+        style = ttk.Style()
+        try:
+            style.configure("TNotebook", background=BG, borderwidth=0)
+            style.configure("TNotebook.Tab", padding=(16, 6))
+        except tk.TclError:
+            pass
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True)
+        self.live_tab = tk.Frame(self.notebook, bg=BG)
+        self.quick_tab = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(self.live_tab, text="Live")
+        self.notebook.add(self.quick_tab, text="Quick Translate")
+
+        self._build_live_tab()
+        self._build_quick_tab()
+
+        # Drive responsive reflow + font scaling off the window size.
+        self.root.bind("<Configure>", self._on_resize)
+
+    def _build_live_tab(self):
+        parent = self.live_tab
+
+        header = tk.Frame(parent, bg=BG)
+        header.pack(fill="x", padx=20, pady=(16, 8))
 
         self.header_var = tk.StringVar(value="Live translation")
         tk.Label(
@@ -441,7 +492,7 @@ class App:
 
         # Language selection — Input → Output.
         labels = list(LANGUAGES.values())
-        lang_frame = tk.Frame(self.root, bg=BG)
+        lang_frame = tk.Frame(parent, bg=BG)
         lang_frame.pack(fill="x", padx=20, pady=(4, 2))
 
         tk.Label(lang_frame, text="Input", bg=BG, fg=MUTED,
@@ -468,7 +519,7 @@ class App:
         self.output_menu.bind("<<ComboboxSelected>>", self._on_language_change)
 
         # Controls — laid out with grid so they can reflow responsively.
-        self.controls = tk.Frame(self.root, bg=BG)
+        self.controls = tk.Frame(parent, bg=BG)
         self.controls.pack(fill="x", padx=20, pady=(4, 8))
 
         self.mic_label = tk.Label(self.controls, text="Mic", bg=BG, fg=MUTED,
@@ -505,27 +556,113 @@ class App:
         self._controls_wide = None
         self._layout_controls(wide=True)
 
-        # API key row (shown only if env var is missing)
-        self.api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not self.api_key:
-            key_row = tk.Frame(self.root, bg=BG)
-            key_row.pack(fill="x", padx=20, pady=(0, 8))
-            tk.Label(key_row, text="GEMINI_API_KEY", bg=BG, fg=MUTED,
-                     font=("Helvetica Neue", 11)).pack(side="left")
-            self.key_var = tk.StringVar()
-            tk.Entry(key_row, textvariable=self.key_var, show="•",
-                     bg=PANEL, fg=TEXT, insertbackground=TEXT, relief="flat",
-                     font=("Helvetica Neue", 11)).pack(
-                side="left", fill="x", expand=True, padx=(8, 0))
-        else:
-            self.key_var = None
-
         # Transcript — original (left) and translation (right), side by side.
-        self.transcript = tk.Frame(self.root, bg=BG)
+        self.transcript = tk.Frame(parent, bg=BG)
         self.transcript.pack(fill="both", expand=True, padx=20, pady=(4, 20))
         self.orig_panel, self.orig_text = self._build_panel("Original")
         self.trans_panel, self.trans_text = self._build_panel("Translation")
         self._layout_transcript(wide=True)
+
+    def _build_quick_tab(self):
+        """Text translation: type/paste on the left, see the result on the right."""
+        parent = self.quick_tab
+        labels = list(LANGUAGES.values())
+
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=20, pady=(16, 6))
+
+        tk.Label(row, text="From", bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11)).pack(side="left")
+        self.q_input_var = tk.StringVar(value=LANGUAGES[DEFAULT_INPUT])
+        ttk.Combobox(row, textvariable=self.q_input_var, values=labels,
+                     state="readonly", width=16).pack(side="left", padx=(8, 8))
+
+        tk.Label(row, text="→", bg=BG, fg=TEXT,
+                 font=("Helvetica Neue", 14, "bold")).pack(side="left")
+
+        tk.Label(row, text="To", bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11)).pack(side="left", padx=(8, 0))
+        self.q_output_var = tk.StringVar(value=LANGUAGES[DEFAULT_OUTPUT])
+        ttk.Combobox(row, textvariable=self.q_output_var, values=labels,
+                     state="readonly", width=16).pack(side="left", padx=(8, 0))
+
+        self.q_translate_btn = RoundedButton(
+            row, text="Translate", command=self._quick_translate,
+            fill=ACCENT, hover_fill=ACCENT_HOVER, fg="white",
+            font=("Helvetica Neue", 13, "bold"), padx=24, pady=7,
+        )
+        self.q_translate_btn.pack(side="right")
+
+        # Panels: editable input (left) + read-only output (right).
+        self.q_panels = tk.Frame(parent, bg=BG)
+        self.q_panels.pack(fill="both", expand=True, padx=20, pady=(4, 6))
+
+        self.q_in_panel, self.q_input_text, in_actions = self._build_quick_panel(
+            "Type or paste text", editable=True)
+        RoundedButton(in_actions, text="Paste", command=self._quick_paste,
+                      fill=PANEL, hover_fill=PANEL_HOVER).pack(side="right")
+        RoundedButton(in_actions, text="Clear", command=self._quick_clear,
+                      fill=PANEL, hover_fill=PANEL_HOVER).pack(side="right", padx=(0, 8))
+
+        self.q_out_panel, self.q_output_text, out_actions = self._build_quick_panel(
+            "Translation", editable=False)
+        RoundedButton(out_actions, text="Copy", command=self._quick_copy,
+                      fill=PANEL, hover_fill=PANEL_HOVER).pack(side="right")
+
+        self._quick_wide = None
+        self._layout_quick(wide=True)
+
+        self.q_status_var = tk.StringVar(value="")
+        tk.Label(parent, textvariable=self.q_status_var, bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11), anchor="w").pack(
+            fill="x", padx=20, pady=(0, 14))
+
+    def _build_quick_panel(self, title, editable):
+        """Panel with a title row (label + action buttons) and a text area.
+
+        Returns (panel_frame, text_widget, actions_frame).
+        """
+        panel = tk.Frame(self.q_panels, bg=BG)
+        head = tk.Frame(panel, bg=BG)
+        head.pack(fill="x", pady=(0, 4))
+        tk.Label(head, text=title, bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11, "bold")).pack(side="left")
+        actions = tk.Frame(head, bg=BG)
+        actions.pack(side="right")
+        text = scrolledtext.ScrolledText(
+            panel, wrap="word", bg=PANEL, fg=TEXT,
+            insertbackground=TEXT, relief="flat",
+            font=self.caption_font, padx=14, pady=14, spacing3=8,
+        )
+        text.pack(fill="both", expand=True)
+        if not editable:
+            text.configure(state="disabled")
+        return panel, text, actions
+
+    def _layout_quick(self, wide):
+        """Side by side when wide; stacked (input on top) when narrow."""
+        if wide == self._quick_wide:
+            return
+        self._quick_wide = wide
+        t = self.q_panels
+        self.q_in_panel.grid_forget()
+        self.q_out_panel.grid_forget()
+        for i in range(2):
+            t.grid_rowconfigure(i, weight=0)
+            t.grid_columnconfigure(i, weight=0)
+
+        if wide:
+            self.q_in_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+            self.q_out_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+            t.grid_rowconfigure(0, weight=1)
+            t.grid_columnconfigure(0, weight=1)
+            t.grid_columnconfigure(1, weight=1)
+        else:
+            self.q_in_panel.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+            self.q_out_panel.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+            t.grid_columnconfigure(0, weight=1)
+            t.grid_rowconfigure(0, weight=1)
+            t.grid_rowconfigure(1, weight=1)
 
     def _build_panel(self, title):
         """A titled, read-only scrolling text panel for the transcript view."""
@@ -566,9 +703,6 @@ class App:
             t.grid_rowconfigure(0, weight=1)
             t.grid_rowconfigure(1, weight=1)
 
-        # Drive responsive reflow + font scaling off the window size.
-        self.root.bind("<Configure>", self._on_resize)
-
     def _layout_controls(self, wide):
         """Single row when wide; two rows (mic on top) when narrow."""
         if wide == self._controls_wide:
@@ -606,6 +740,7 @@ class App:
         self._layout_controls(wide=width >= 720)
         # Two side-by-side panels need room; stack them below this width.
         self._layout_transcript(wide=width >= 720)
+        self._layout_quick(wide=width >= 720)
         # Scale caption + header type to the window width (clamped).
         span = max(0.0, min(1.0, (width - 560) / (1100 - 560)))
         self.caption_font.configure(size=int(round(15 + span * 8)))   # 15–23
@@ -677,6 +812,76 @@ class App:
         self._orig_needs_para = False
         self._trans_needs_para = False
 
+    # -- Quick Translate (text) tab --
+
+    def _q_status(self, text, error=False):
+        self.q_status_var.set(text)
+
+    def _resolve_key(self):
+        return self.api_key or (self.key_var.get().strip() if self.key_var else "")
+
+    def _quick_translate(self):
+        text = self.q_input_text.get("1.0", "end").strip()
+        if not text:
+            self._q_status("Type or paste some text first", error=True)
+            return
+        api_key = self._resolve_key()
+        if not api_key:
+            self._q_status("Set GEMINI_API_KEY first", error=True)
+            return
+
+        source = code_for_label(self.q_input_var.get())
+        target = code_for_label(self.q_output_var.get())
+        self.q_translate_btn.set_enabled(False)
+        self._q_status("Translating…")
+
+        def work():
+            try:
+                result = translate_text(api_key, text, source, target)
+                self.events.put(("quick_result", result))
+            except Exception as exc:  # surface API/network errors in the UI
+                self.events.put(("quick_error", str(exc)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _quick_done(self, result, error):
+        self.q_translate_btn.set_enabled(True)
+        if error is not None:
+            self._q_status(f"Error: {error}", error=True)
+            return
+        self.q_output_text.configure(state="normal")
+        self.q_output_text.delete("1.0", "end")
+        self.q_output_text.insert("end", result or "")
+        self.q_output_text.configure(state="disabled")
+        self._q_status("Done")
+
+    def _quick_copy(self):
+        out = self.q_output_text.get("1.0", "end").strip()
+        if not out:
+            self._q_status("Nothing to copy", error=True)
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(out)
+        self._q_status("Translation copied to clipboard")
+
+    def _quick_paste(self):
+        try:
+            clip = self.root.clipboard_get()
+        except tk.TclError:
+            clip = ""
+        if clip:
+            self.q_input_text.insert("insert", clip)
+            self._q_status("Pasted from clipboard")
+        else:
+            self._q_status("Clipboard is empty", error=True)
+
+    def _quick_clear(self):
+        self.q_input_text.delete("1.0", "end")
+        self.q_output_text.configure(state="normal")
+        self.q_output_text.delete("1.0", "end")
+        self.q_output_text.configure(state="disabled")
+        self._q_status("")
+
     def _toggle(self):
         if self.running:
             self._stop()
@@ -745,6 +950,10 @@ class App:
                 elif kind == "error":
                     self._set_status(f"Error: {payload}", error=True)
                     self._stop()
+                elif kind == "quick_result":
+                    self._quick_done(payload, None)
+                elif kind == "quick_error":
+                    self._quick_done(None, payload)
         except queue.Empty:
             pass
         self.root.after(60, self._drain_events)
