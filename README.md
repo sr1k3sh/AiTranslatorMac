@@ -13,7 +13,7 @@ Two tabs:
 - Captures your mic audio and streams it to the Gemini live-translate model.
 - **Pick input and output languages** from the menus — English, 日本語
   (Japanese), नेपाली (Nepali), Español (Spanish), and 中文 (Chinese).
-  Defaults to 日本語 → English.
+  Defaults to 日本語 → English. The **⇄** button flips the two in one click.
 - Shows a **side-by-side transcript** — the original speech on the left and
   the translation on the right (they stack vertically on a narrow window).
   **Clear** wipes both panels.
