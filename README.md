@@ -18,12 +18,28 @@ Two tabs:
   the translation on the right (they stack vertically on a narrow window).
   **Clear** wipes both panels.
 - Optionally also plays the translated audio.
+- **Captions only (cheaper)** — tick this to get text-only translation. It
+  switches to a half-cascade live model that returns text instead of
+  synthesised audio, which avoids the (pricey) audio-output cost. You still
+  see both panels; you just don't get spoken translation.
 
 ### Quick Translate (text)
 
 - Type or **paste** text on the left, pick the From/To languages, and click
   **Translate** to see the result on the right.
 - **Copy** puts the translation on your clipboard; **Clear** empties both sides.
+
+## Cost
+
+Usage is billed by your Gemini API key (free tier available; paid tier charges
+per use). Rough guide:
+
+- **Live tab, default (audio out):** ~$0.03/min — the synthesised audio output
+  is the bulk of the cost.
+- **Live tab, captions only:** much cheaper — text output instead of audio.
+- **Quick Translate (text):** a fraction of a cent per translation.
+
+See [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing).
 
 ## Setup
 

@@ -38,6 +38,10 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
 TEXT_MODEL = "gemini-2.5-flash"   # used by the Quick Translate (text) tab
+# Half-cascade Live model used for "captions only" mode: audio in, TEXT out.
+# Far cheaper than the audio-out translate model, at the cost of no spoken
+# translation (and a general — not translation-specialised — model).
+CAPTIONS_MODEL = "gemini-live-2.5-flash"
 
 # Languages offered for both input and output, as code -> display label. The
 # live-translate model auto-detects the spoken language, so the *output* choice
@@ -69,13 +73,29 @@ def code_for_label(label: str) -> str:
     return label
 
 
-def build_config(play_audio: bool, target_language: str) -> types.LiveConnectConfig:
-    """Live API config: speak audio in, get the target language back.
+def build_config(play_audio: bool, target_language: str,
+                 captions_only: bool = False) -> types.LiveConnectConfig:
+    """Build the Live API config for the chosen mode.
 
-    We always request AUDIO (what the live-translate model is built for) plus
-    both transcriptions: the input transcription is the original speech, and
-    the output transcription is the translated text.
+    Default mode uses the dedicated audio-to-audio translate model: AUDIO out
+    plus input/output transcriptions (original + translated text).
+
+    Captions-only mode uses a half-cascade model that returns TEXT directly —
+    no synthesised audio, so the (expensive) audio output isn't billed. The
+    original speech still comes through the input transcription.
     """
+    if captions_only:
+        instruction = (
+            "You are a simultaneous interpreter. Translate everything the user "
+            f"says into {lang_name(target_language)}. Respond with only the "
+            "translation — no quotes, notes, or commentary."
+        )
+        return types.LiveConnectConfig(
+            response_modalities=["TEXT"],
+            system_instruction=types.Content(parts=[types.Part(text=instruction)]),
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+        )
+
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         translation_config=types.TranslationConfig(
@@ -111,11 +131,13 @@ class Translator:
     """
 
     def __init__(self, api_key, events, mic_index=None, play_audio=False,
-                 target_language="en"):
+                 target_language="en", captions_only=False):
         self.api_key = api_key
         self.events = events
         self.mic_index = mic_index
-        self.play_audio = play_audio
+        self.captions_only = captions_only
+        # No synthesised audio exists in captions-only mode, so never play.
+        self.play_audio = play_audio and not captions_only
         self.target_language = target_language
 
         self._thread = None
@@ -161,11 +183,13 @@ class Translator:
             http_options={"api_version": "v1beta"},
             api_key=self.api_key,
         )
-        config = build_config(self.play_audio, self.target_language)
+        config = build_config(self.play_audio, self.target_language,
+                               self.captions_only)
+        model = CAPTIONS_MODEL if self.captions_only else MODEL
 
         try:
             async with (
-                client.aio.live.connect(model=MODEL, config=config) as session,
+                client.aio.live.connect(model=model, config=config) as session,
                 asyncio.TaskGroup() as tg,
             ):
                 self.session = session
@@ -534,13 +558,25 @@ class App:
             fill=PANEL, hover_fill=PANEL_HOVER,
         )
 
+        # Two stacked checkboxes share one grid cell so the row stays compact.
+        self.opts = tk.Frame(self.controls, bg=BG)
         self.play_var = tk.BooleanVar(value=False)
         self.play_check = tk.Checkbutton(
-            self.controls, text="Play translated audio", variable=self.play_var,
+            self.opts, text="Play translated audio", variable=self.play_var,
             bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
             activeforeground=TEXT, font=("Helvetica Neue", 11),
-            highlightthickness=0, bd=0,
+            highlightthickness=0, bd=0, anchor="w",
         )
+        self.play_check.pack(fill="x", anchor="w")
+        self.captions_var = tk.BooleanVar(value=False)
+        self.captions_check = tk.Checkbutton(
+            self.opts, text="Captions only (cheaper)", variable=self.captions_var,
+            command=self._on_captions_toggle,
+            bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
+            activeforeground=TEXT, font=("Helvetica Neue", 11),
+            highlightthickness=0, bd=0, anchor="w",
+        )
+        self.captions_check.pack(fill="x", anchor="w")
 
         self.clear_btn = RoundedButton(
             self.controls, text="Clear", command=self._clear_captions,
@@ -710,7 +746,7 @@ class App:
         self._controls_wide = wide
         c = self.controls
         for w in (self.mic_label, self.mic_menu, self.meet_btn,
-                  self.play_check, self.clear_btn, self.toggle_btn):
+                  self.opts, self.clear_btn, self.toggle_btn):
             w.grid_forget()
         for col in range(6):
             c.grid_columnconfigure(col, weight=0)
@@ -719,17 +755,17 @@ class App:
             self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
             self.mic_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
             self.meet_btn.grid(row=0, column=2, padx=(0, 16), pady=4)
-            self.play_check.grid(row=0, column=3, padx=(0, 12), pady=4, sticky="w")
+            self.opts.grid(row=0, column=3, padx=(0, 12), pady=4, sticky="w")
             self.clear_btn.grid(row=0, column=4, padx=(0, 8), pady=4, sticky="e")
             self.toggle_btn.grid(row=0, column=5, pady=4, sticky="e")
             c.grid_columnconfigure(1, weight=1)
         else:
             self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=(4, 8), sticky="w")
             self.mic_menu.grid(row=0, column=1, columnspan=3, pady=(4, 8), sticky="ew")
-            self.meet_btn.grid(row=1, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
-            self.play_check.grid(row=1, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
-            self.clear_btn.grid(row=1, column=2, padx=(0, 8), pady=(0, 4), sticky="w")
-            self.toggle_btn.grid(row=1, column=3, pady=(0, 4), sticky="e")
+            self.opts.grid(row=1, column=0, columnspan=4, pady=(0, 6), sticky="w")
+            self.meet_btn.grid(row=2, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.clear_btn.grid(row=2, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.toggle_btn.grid(row=2, column=3, pady=(0, 4), sticky="e")
             c.grid_columnconfigure(1, weight=1)
             c.grid_columnconfigure(3, weight=1)
 
@@ -802,6 +838,14 @@ class App:
             self._set_status("Stop before changing languages", error=True)
             return
         self._apply_languages()
+
+    def _on_captions_toggle(self):
+        """Captions-only mode produces no audio, so disable the play option."""
+        if self.captions_var.get():
+            self.play_var.set(False)
+            self.play_check.configure(state="disabled")
+        else:
+            self.play_check.configure(state="normal")
 
     def _clear_captions(self):
         """Wipe both transcript panels."""
@@ -902,6 +946,7 @@ class App:
             mic_index=self._selected_mic_index(),
             play_audio=self.play_var.get(),
             target_language=self._output_code(),
+            captions_only=self.captions_var.get(),
         )
         self.translator.start()
         self.running = True
@@ -909,6 +954,7 @@ class App:
         self.toggle_btn.set_style(fill=DANGER, hover_fill=DANGER_HOVER)
         self.input_menu.configure(state="disabled")
         self.output_menu.configure(state="disabled")
+        self.captions_check.configure(state="disabled")
 
     def _stop(self):
         if self.translator is not None:
@@ -918,6 +964,10 @@ class App:
         self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
         self.input_menu.configure(state="readonly")
         self.output_menu.configure(state="readonly")
+        self.captions_check.configure(state="normal")
+        # Restore the play checkbox unless captions-only is still selected.
+        self.play_check.configure(
+            state="disabled" if self.captions_var.get() else "normal")
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)
