@@ -512,8 +512,13 @@ class App:
         self.input_menu.pack(side="left", padx=(8, 8))
         self.input_menu.bind("<<ComboboxSelected>>", self._on_language_change)
 
-        tk.Label(lang_frame, text="→", bg=BG, fg=TEXT,
-                 font=("Helvetica Neue", 14, "bold")).pack(side="left")
+        # Clickable swap: flip the Input/Output languages.
+        self.lang_swap_btn = RoundedButton(
+            lang_frame, text="⇄", command=self._swap_languages,
+            fill=PANEL, hover_fill=PANEL_HOVER,
+            font=("Helvetica Neue", 14, "bold"), padx=12, pady=5,
+        )
+        self.lang_swap_btn.pack(side="left", padx=(2, 2))
 
         tk.Label(lang_frame, text="Output", bg=BG, fg=MUTED,
                  font=("Helvetica Neue", 11)).pack(side="left", padx=(8, 0))
@@ -824,6 +829,16 @@ class App:
             return
         self._apply_languages()
 
+    def _swap_languages(self):
+        """Flip the Input and Output languages (only while stopped)."""
+        if self.running:
+            self._set_status("Stop before changing languages", error=True)
+            return
+        in_lang, out_lang = self.input_var.get(), self.output_var.get()
+        self.input_var.set(out_lang)
+        self.output_var.set(in_lang)
+        self._apply_languages()
+
     def _clear_captions(self):
         """Wipe both transcript panels."""
         for widget in (self.orig_text, self.trans_text):
@@ -983,6 +998,7 @@ class App:
         self.toggle_btn.set_style(fill=DANGER, hover_fill=DANGER_HOVER)
         self.input_menu.configure(state="disabled")
         self.output_menu.configure(state="disabled")
+        self.lang_swap_btn.set_enabled(False)
 
     def _stop(self):
         if self.translator is not None:
@@ -992,6 +1008,7 @@ class App:
         self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
         self.input_menu.configure(state="readonly")
         self.output_menu.configure(state="readonly")
+        self.lang_swap_btn.set_enabled(True)
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)
