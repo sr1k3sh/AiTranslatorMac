@@ -10,8 +10,9 @@ the Gemini Live API.
 - **Pick input and output languages** from the menus — English, 日本語
   (Japanese), नेपाली (Nepali), Español (Spanish), and 中文 (Chinese).
   Defaults to 日本語 → English.
-- Displays the translation as scrolling text in a window; **Clear** wipes the
-  current captions.
+- Shows a **side-by-side transcript** — the original speech on the left and
+  the translation on the right (they stack vertically on a narrow window).
+  **Clear** wipes both panels.
 - Optionally also plays the translated audio.
 
 ## Setup
@@ -78,8 +79,9 @@ python app.py
 
 Pick your microphone, choose the **Input** and **Output** languages from the
 menus (default 日本語 → English), then click **Start** and speak (or play)
-audio. Translated captions appear in the window. Use **Clear** to wipe them
-and **Stop** to end the session — languages can only be changed while stopped.
+audio. The original speech appears on the left and its translation on the
+right. Use **Clear** to wipe both panels and **Stop** to end the session —
+languages can only be changed while stopped.
 
 ### Translating Google Meet (or any app audio)
 
