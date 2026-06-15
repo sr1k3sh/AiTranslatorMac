@@ -21,8 +21,10 @@ Two tabs:
 
 ### Quick Translate (text)
 
-- Type or **paste** text on the left, pick the From/To languages, and click
-  **Translate** to see the result on the right.
+- Type or **paste** text on the left and the translation appears on the right
+  **automatically** — it translates shortly after you stop typing (no need to
+  click anything). Changing the From/To languages re-translates too.
+- The **Translate** button is still there if you want to force it immediately.
 - **Copy** puts the translation on your clipboard; **Clear** empties both sides.
 
 ## Setup
