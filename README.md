@@ -1,15 +1,17 @@
 # TranslateAI
 
-A simple macOS desktop app that listens to spoken **Japanese** or **English**
-through your microphone and shows the translation as live on-screen captions,
-powered by the Gemini Live API.
+A simple macOS desktop app that listens to spoken audio through your
+microphone and shows the translation as live on-screen captions, powered by
+the Gemini Live API.
 
 ## What it does
 
 - Captures your mic audio and streams it to the Gemini live-translate model.
-- Translates in **both directions** — click the direction button to switch
-  between 日本語 → English and English → 日本語.
-- Displays the translation as scrolling text in a window.
+- **Pick input and output languages** from the menus — English, 日本語
+  (Japanese), नेपाली (Nepali), Español (Spanish), and 中文 (Chinese).
+  Defaults to 日本語 → English.
+- Displays the translation as scrolling text in a window; **Clear** wipes the
+  current captions.
 - Optionally also plays the translated audio.
 
 ## Setup
@@ -59,10 +61,10 @@ source .venv/bin/activate
 python app.py
 ```
 
-Pick your microphone, choose a direction with the **日本語 → English** button
-(click it to flip to **English → 日本語**), then click **Start** and speak (or
-play) audio. Translated captions appear in the window. Click **Stop** to end
-the session — the direction can only be switched while stopped.
+Pick your microphone, choose the **Input** and **Output** languages from the
+menus (default 日本語 → English), then click **Start** and speak (or play)
+audio. Translated captions appear in the window. Use **Clear** to wipe them
+and **Stop** to end the session — languages can only be changed while stopped.
 
 ### Translating Google Meet (or any app audio)
 
