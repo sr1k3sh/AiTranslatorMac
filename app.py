@@ -42,6 +42,9 @@ TEXT_MODEL = "gemini-2.5-flash"   # used by the Quick Translate (text) tab
 # Far cheaper than the audio-out translate model, at the cost of no spoken
 # translation (and a general — not translation-specialised — model).
 CAPTIONS_MODEL = "gemini-live-2.5-flash"
+# Captions-only mode is unverified against a live key, so the toggle ships
+# disabled. Flip to True (or set CAPTIONS_ONLY=1 in the env) to enable it.
+CAPTIONS_ENABLED = os.environ.get("CAPTIONS_ONLY", "") not in ("", "0", "false")
 
 # Languages offered for both input and output, as code -> display label. The
 # live-translate model auto-detects the spoken language, so the *output* choice
@@ -577,6 +580,8 @@ class App:
             highlightthickness=0, bd=0, anchor="w",
         )
         self.captions_check.pack(fill="x", anchor="w")
+        if not CAPTIONS_ENABLED:
+            self.captions_check.configure(state="disabled")
 
         self.clear_btn = RoundedButton(
             self.controls, text="Clear", command=self._clear_captions,
@@ -964,7 +969,8 @@ class App:
         self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
         self.input_menu.configure(state="readonly")
         self.output_menu.configure(state="readonly")
-        self.captions_check.configure(state="normal")
+        self.captions_check.configure(
+            state="normal" if CAPTIONS_ENABLED else "disabled")
         # Restore the play checkbox unless captions-only is still selected.
         self.play_check.configure(
             state="disabled" if self.captions_var.get() else "normal")

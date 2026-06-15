@@ -18,10 +18,11 @@ Two tabs:
   the translation on the right (they stack vertically on a narrow window).
   **Clear** wipes both panels.
 - Optionally also plays the translated audio.
-- **Captions only (cheaper)** — tick this to get text-only translation. It
-  switches to a half-cascade live model that returns text instead of
-  synthesised audio, which avoids the (pricey) audio-output cost. You still
-  see both panels; you just don't get spoken translation.
+- **Captions only (cheaper)** — text-only translation: it switches to a
+  half-cascade live model that returns text instead of synthesised audio,
+  avoiding the (pricey) audio-output cost. You still see both panels; you just
+  don't get spoken translation. **Disabled by default** (unverified) — enable
+  it by running with `CAPTIONS_ONLY=1` (or flip `CAPTIONS_ENABLED` in `app.py`).
 
 ### Quick Translate (text)
 
