@@ -1,10 +1,10 @@
 """
-TranslateAI — Live two-way Japanese ⇄ English captions for macOS.
+TranslateAI — Live speech translation captions for macOS.
 
 Listens to your microphone, streams the audio to the Gemini Live API
 (live-translate model), and shows the translation as live captions in a
-simple desktop window. Use the direction button to switch between
-日本語 → English and English → 日本語.
+simple desktop window. Pick the input and output languages from the menus
+(defaults: 日本語 → English).
 
 Run:
     python app.py
@@ -38,18 +38,34 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-3.5-live-translate-preview"
 
-# Supported translation directions, as (source, target) language codes. The
-# live-translate model auto-detects the spoken language, so only the target
-# code actually drives the translation; the source is used for UI labels.
-LANGUAGE_NAMES = {"en": "English", "ja": "日本語"}
-DIRECTIONS = [("ja", "en"), ("en", "ja")]   # JA→EN first, EN→JA second
+# Languages offered for both input and output, as code -> display label. The
+# live-translate model auto-detects the spoken language, so the *output* choice
+# drives the translation (target_language_code); the *input* choice sets the
+# header label and the user's expectation.
+LANGUAGES = {
+    "ja": "日本語 (Japanese)",
+    "en": "English",
+    "ne": "नेपाली (Nepali)",
+    "es": "Español (Spanish)",
+    "zh": "中文 (Chinese)",
+}
+DEFAULT_INPUT = "ja"
+DEFAULT_OUTPUT = "en"
 
 pya = pyaudio.PyAudio()
 
 
-def direction_label(src: str, tgt: str) -> str:
-    """Human-readable arrow label, e.g. '日本語 → English'."""
-    return f"{LANGUAGE_NAMES[src]} → {LANGUAGE_NAMES[tgt]}"
+def lang_name(code: str) -> str:
+    """Short display name for a language code, e.g. 'ja' -> '日本語'."""
+    return LANGUAGES.get(code, code).split(" (")[0]
+
+
+def code_for_label(label: str) -> str:
+    """Map a combobox label back to its language code."""
+    for code, name in LANGUAGES.items():
+        if name == label:
+            return code
+    return label
 
 
 def build_config(play_audio: bool, target_language: str) -> types.LiveConnectConfig:
@@ -381,7 +397,6 @@ class App:
         self.translator = None
         self.running = False
         self._needs_paragraph = False
-        self._dir_index = 0  # index into DIRECTIONS; 0 = JA→EN
 
         root.title("TranslateAI")
         root.configure(bg=BG)
@@ -389,7 +404,7 @@ class App:
         root.minsize(560, 420)
 
         self._build_ui()
-        self._apply_direction()
+        self._apply_languages()
         self._refresh_mics()
         self.root.after(60, self._drain_events)
 
@@ -415,6 +430,34 @@ class App:
         )
         self.status_label.pack(side="right")
 
+        # Language selection — Input → Output.
+        labels = list(LANGUAGES.values())
+        lang_frame = tk.Frame(self.root, bg=BG)
+        lang_frame.pack(fill="x", padx=20, pady=(4, 2))
+
+        tk.Label(lang_frame, text="Input", bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11)).pack(side="left")
+        self.input_var = tk.StringVar(value=LANGUAGES[DEFAULT_INPUT])
+        self.input_menu = ttk.Combobox(
+            lang_frame, textvariable=self.input_var, values=labels,
+            state="readonly", width=16,
+        )
+        self.input_menu.pack(side="left", padx=(8, 8))
+        self.input_menu.bind("<<ComboboxSelected>>", self._on_language_change)
+
+        tk.Label(lang_frame, text="→", bg=BG, fg=TEXT,
+                 font=("Helvetica Neue", 14, "bold")).pack(side="left")
+
+        tk.Label(lang_frame, text="Output", bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11)).pack(side="left", padx=(8, 0))
+        self.output_var = tk.StringVar(value=LANGUAGES[DEFAULT_OUTPUT])
+        self.output_menu = ttk.Combobox(
+            lang_frame, textvariable=self.output_var, values=labels,
+            state="readonly", width=16,
+        )
+        self.output_menu.pack(side="left", padx=(8, 0))
+        self.output_menu.bind("<<ComboboxSelected>>", self._on_language_change)
+
         # Controls — laid out with grid so they can reflow responsively.
         self.controls = tk.Frame(self.root, bg=BG)
         self.controls.pack(fill="x", padx=20, pady=(4, 8))
@@ -426,11 +469,6 @@ class App:
             self.controls, textvariable=self.mic_var, state="readonly", width=24
         )
 
-        self.dir_var = tk.StringVar()
-        self.dir_btn = RoundedButton(
-            self.controls, textvariable=self.dir_var,
-            command=self._swap_direction, fill=PANEL, hover_fill=PANEL_HOVER,
-        )
         self.meet_btn = RoundedButton(
             self.controls, text="🎧 Meet", command=self._select_meet_audio,
             fill=PANEL, hover_fill=PANEL_HOVER,
@@ -442,6 +480,11 @@ class App:
             bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
             activeforeground=TEXT, font=("Helvetica Neue", 11),
             highlightthickness=0, bd=0,
+        )
+
+        self.clear_btn = RoundedButton(
+            self.controls, text="Clear", command=self._clear_captions,
+            fill=PANEL, hover_fill=PANEL_HOVER,
         )
 
         self.toggle_btn = RoundedButton(
@@ -486,8 +529,8 @@ class App:
             return
         self._controls_wide = wide
         c = self.controls
-        for w in (self.mic_label, self.mic_menu, self.dir_btn,
-                  self.meet_btn, self.play_check, self.toggle_btn):
+        for w in (self.mic_label, self.mic_menu, self.meet_btn,
+                  self.play_check, self.clear_btn, self.toggle_btn):
             w.grid_forget()
         for col in range(6):
             c.grid_columnconfigure(col, weight=0)
@@ -495,17 +538,17 @@ class App:
         if wide:
             self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
             self.mic_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
-            self.dir_btn.grid(row=0, column=2, padx=(0, 8), pady=4)
-            self.meet_btn.grid(row=0, column=3, padx=(0, 16), pady=4)
-            self.play_check.grid(row=0, column=4, padx=(0, 12), pady=4, sticky="w")
+            self.meet_btn.grid(row=0, column=2, padx=(0, 16), pady=4)
+            self.play_check.grid(row=0, column=3, padx=(0, 12), pady=4, sticky="w")
+            self.clear_btn.grid(row=0, column=4, padx=(0, 8), pady=4, sticky="e")
             self.toggle_btn.grid(row=0, column=5, pady=4, sticky="e")
             c.grid_columnconfigure(1, weight=1)
         else:
             self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=(4, 8), sticky="w")
             self.mic_menu.grid(row=0, column=1, columnspan=3, pady=(4, 8), sticky="ew")
-            self.dir_btn.grid(row=1, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
-            self.meet_btn.grid(row=1, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
-            self.play_check.grid(row=1, column=2, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.meet_btn.grid(row=1, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.play_check.grid(row=1, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.clear_btn.grid(row=1, column=2, padx=(0, 8), pady=(0, 4), sticky="w")
             self.toggle_btn.grid(row=1, column=3, pady=(0, 4), sticky="e")
             c.grid_columnconfigure(1, weight=1)
             c.grid_columnconfigure(3, weight=1)
@@ -558,28 +601,31 @@ class App:
                 error=True,
             )
 
-    def _current_direction(self):
-        return DIRECTIONS[self._dir_index]
+    def _input_code(self):
+        return code_for_label(self.input_var.get())
 
-    def _apply_direction(self):
-        """Sync the window title, header and button to the current direction."""
-        src, tgt = self._current_direction()
-        label = direction_label(src, tgt)
+    def _output_code(self):
+        return code_for_label(self.output_var.get())
+
+    def _apply_languages(self):
+        """Sync the window title and header to the selected languages."""
+        label = f"{lang_name(self._input_code())} → {lang_name(self._output_code())}"
         self.header_var.set(f"Live {label}")
-        self.dir_var.set(label)
         self.root.title(f"TranslateAI — {label}")
 
-    def _swap_direction(self):
-        """Flip the translation direction (JA→EN ⇄ EN→JA).
-
-        Switching mid-session would require restarting the Gemini connection,
-        so we only allow it while stopped.
-        """
+    def _on_language_change(self, _event=None):
+        """Selecting a language while running would need a reconnect."""
         if self.running:
-            self._set_status("Stop before switching direction", error=True)
+            self._set_status("Stop before changing languages", error=True)
             return
-        self._dir_index = (self._dir_index + 1) % len(DIRECTIONS)
-        self._apply_direction()
+        self._apply_languages()
+
+    def _clear_captions(self):
+        """Wipe the caption area."""
+        self.caption.configure(state="normal")
+        self.caption.delete("1.0", "end")
+        self.caption.configure(state="disabled")
+        self._needs_paragraph = False
 
     def _toggle(self):
         if self.running:
@@ -594,19 +640,19 @@ class App:
             return
 
         self._needs_paragraph = False
-        _, target = self._current_direction()
         self.translator = Translator(
             api_key=api_key,
             events=self.events,
             mic_index=self._selected_mic_index(),
             play_audio=self.play_var.get(),
-            target_language=target,
+            target_language=self._output_code(),
         )
         self.translator.start()
         self.running = True
         self.toggle_btn.set_text("Stop")
         self.toggle_btn.set_style(fill=DANGER, hover_fill=DANGER_HOVER)
-        self.dir_btn.set_enabled(False)
+        self.input_menu.configure(state="disabled")
+        self.output_menu.configure(state="disabled")
 
     def _stop(self):
         if self.translator is not None:
@@ -614,7 +660,8 @@ class App:
         self.running = False
         self.toggle_btn.set_text("Start")
         self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
-        self.dir_btn.set_enabled(True)
+        self.input_menu.configure(state="readonly")
+        self.output_menu.configure(state="readonly")
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)
