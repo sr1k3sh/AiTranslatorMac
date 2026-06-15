@@ -42,6 +42,21 @@ the Gemini Live API.
 
 ## Run
 
+### Guided setup (recommended)
+
+Run the interactive setup script from the repo and follow the three prompts:
+
+```sh
+./setup.sh
+```
+
+1. **Install packages?** — `Y` installs the Python dependencies into a local
+   `.venv`; `N` exits.
+2. **Gemini API key** — if `GEMINI_API_KEY` is already set, it offers to skip
+   this step; otherwise paste your key (it shows where to get a free one), or
+   leave it blank to enter it in the app window later.
+3. **Run the app?** — `Y` launches TranslateAI; `N` exits.
+
 ### Click to launch (no terminal)
 
 - **Double-click `launch.command`** in Finder. On first run it sets up the
