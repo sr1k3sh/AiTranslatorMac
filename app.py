@@ -19,6 +19,7 @@ import threading
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
+import tkinter.font as tkfont
 
 import pyaudio
 import numpy as np
@@ -264,9 +265,113 @@ class Translator:
 
 BG = "#0f1115"
 PANEL = "#171a21"
+PANEL_HOVER = "#222632"
 ACCENT = "#4f8cff"
+ACCENT_HOVER = "#3d76e0"
+DANGER = "#e0564f"
+DANGER_HOVER = "#c8463f"
 TEXT = "#e7e9ee"
 MUTED = "#8a91a0"
+DISABLED = "#3a3f4b"
+
+
+class RoundedButton(tk.Canvas):
+    """A flat, rounded button drawn on a Canvas.
+
+    macOS Aqua ignores ``bg``/``fg`` on a native ``tk.Button``, which makes
+    custom-coloured buttons render with invisible text. Drawing on a Canvas
+    sidesteps that entirely and gives us hover/disabled states for free.
+    """
+
+    def __init__(self, master, *, text="", textvariable=None, command=None,
+                 fill=PANEL, fg=TEXT, hover_fill=PANEL_HOVER, parent_bg=BG,
+                 font=("Helvetica Neue", 11), padx=16, pady=7, radius=11):
+        super().__init__(master, bg=parent_bg, highlightthickness=0, bd=0)
+        self._command = command
+        self._fill = fill
+        self._hover_fill = hover_fill
+        self._fg = fg
+        self._radius = radius
+        self._padx = padx
+        self._pady = pady
+        self._font = tkfont.Font(font=font)
+        self._enabled = True
+        self._hovered = False
+
+        self._textvariable = textvariable
+        self._text = textvariable.get() if textvariable is not None else text
+        if textvariable is not None:
+            textvariable.trace_add("write", self._on_var_change)
+
+        self.configure(cursor="pointinghand")
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self._resize_to_text()
+
+    # -- public API (mirrors the bits of tk.Button we use) --
+
+    def set_text(self, text):
+        self._text = text
+        self._resize_to_text()
+
+    def set_style(self, *, fill=None, hover_fill=None):
+        if fill is not None:
+            self._fill = fill
+        if hover_fill is not None:
+            self._hover_fill = hover_fill
+        self._redraw()
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        self.configure(cursor="pointinghand" if enabled else "arrow")
+        self._redraw()
+
+    # -- internals --
+
+    def _on_var_change(self, *_):
+        self.set_text(self._textvariable.get())
+
+    def _resize_to_text(self):
+        w = self._font.measure(self._text) + self._padx * 2
+        h = self._font.metrics("linespace") + self._pady * 2
+        self.configure(width=w, height=h)
+        self._redraw()
+
+    def _round_rect(self, x1, y1, x2, y2, r, **kw):
+        pts = [
+            x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
+            x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
+        ]
+        return self.create_polygon(pts, smooth=True, **kw)
+
+    def _redraw(self):
+        self.delete("all")
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        if not self._enabled:
+            fill, fg = PANEL, DISABLED
+        elif self._hovered:
+            fill, fg = self._hover_fill, self._fg
+        else:
+            fill, fg = self._fill, self._fg
+        self._round_rect(1, 1, w - 1, h - 1, self._radius, fill=fill, outline=fill)
+        self.create_text(w / 2, h / 2, text=self._text, fill=fg, font=self._font)
+
+    def _on_enter(self, _e):
+        self._hovered = True
+        self._redraw()
+
+    def _on_leave(self, _e):
+        self._hovered = False
+        self._redraw()
+
+    def _on_release(self, _e):
+        if self._enabled and self._command is not None:
+            self._command()
 
 
 class App:
@@ -289,13 +394,18 @@ class App:
         self.root.after(60, self._drain_events)
 
     def _build_ui(self):
+        # Fonts kept as objects so we can rescale them on resize.
+        self.header_font = tkfont.Font(family="Helvetica Neue", size=20,
+                                       weight="bold")
+        self.caption_font = tkfont.Font(family="Helvetica Neue", size=18)
+
         header = tk.Frame(self.root, bg=BG)
         header.pack(fill="x", padx=20, pady=(18, 8))
 
         self.header_var = tk.StringVar(value="Live translation")
         tk.Label(
             header, textvariable=self.header_var,
-            bg=BG, fg=TEXT, font=("Helvetica Neue", 20, "bold"),
+            bg=BG, fg=TEXT, font=self.header_font,
         ).pack(side="left")
 
         self.status_var = tk.StringVar(value="Idle")
@@ -305,54 +415,43 @@ class App:
         )
         self.status_label.pack(side="right")
 
-        # Controls
-        controls = tk.Frame(self.root, bg=BG)
-        controls.pack(fill="x", padx=20, pady=(4, 8))
+        # Controls — laid out with grid so they can reflow responsively.
+        self.controls = tk.Frame(self.root, bg=BG)
+        self.controls.pack(fill="x", padx=20, pady=(4, 8))
 
-        tk.Label(controls, text="Mic", bg=BG, fg=MUTED,
-                 font=("Helvetica Neue", 11)).pack(side="left")
+        self.mic_label = tk.Label(self.controls, text="Mic", bg=BG, fg=MUTED,
+                                  font=("Helvetica Neue", 11))
         self.mic_var = tk.StringVar()
         self.mic_menu = ttk.Combobox(
-            controls, textvariable=self.mic_var, state="readonly", width=34
+            self.controls, textvariable=self.mic_var, state="readonly", width=24
         )
-        self.mic_menu.pack(side="left", padx=(8, 8))
 
         self.dir_var = tk.StringVar()
-        self.dir_btn = tk.Button(
-            controls, textvariable=self.dir_var, command=self._swap_direction,
-            bg=PANEL, fg=TEXT, activebackground="#222632",
-            activeforeground=TEXT, relief="flat",
-            font=("Helvetica Neue", 11), padx=12, pady=3,
-            highlightthickness=0, bd=0, cursor="pointinghand",
+        self.dir_btn = RoundedButton(
+            self.controls, textvariable=self.dir_var,
+            command=self._swap_direction, fill=PANEL, hover_fill=PANEL_HOVER,
         )
-        self.dir_btn.pack(side="left", padx=(0, 8))
-
-        self.meet_btn = tk.Button(
-            controls, text="🎧 Meet", command=self._select_meet_audio,
-            bg=PANEL, fg=TEXT, activebackground="#222632",
-            activeforeground=TEXT, relief="flat",
-            font=("Helvetica Neue", 11), padx=12, pady=3,
-            highlightthickness=0, bd=0, cursor="pointinghand",
+        self.meet_btn = RoundedButton(
+            self.controls, text="🎧 Meet", command=self._select_meet_audio,
+            fill=PANEL, hover_fill=PANEL_HOVER,
         )
-        self.meet_btn.pack(side="left", padx=(0, 16))
 
         self.play_var = tk.BooleanVar(value=False)
         self.play_check = tk.Checkbutton(
-            controls, text="Play translated audio", variable=self.play_var,
+            self.controls, text="Play translated audio", variable=self.play_var,
             bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
             activeforeground=TEXT, font=("Helvetica Neue", 11),
             highlightthickness=0, bd=0,
         )
-        self.play_check.pack(side="left")
 
-        self.toggle_btn = tk.Button(
-            controls, text="Start", command=self._toggle,
-            bg=ACCENT, fg="white", activebackground="#3d76e0",
-            activeforeground="white", relief="flat",
-            font=("Helvetica Neue", 13, "bold"), padx=22, pady=4,
-            highlightthickness=0, bd=0, cursor="pointinghand",
+        self.toggle_btn = RoundedButton(
+            self.controls, text="Start", command=self._toggle,
+            fill=ACCENT, hover_fill=ACCENT_HOVER, fg="white",
+            font=("Helvetica Neue", 13, "bold"), padx=24, pady=7,
         )
-        self.toggle_btn.pack(side="right")
+
+        self._controls_wide = None
+        self._layout_controls(wide=True)
 
         # API key row (shown only if env var is missing)
         self.api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -373,10 +472,53 @@ class App:
         self.caption = scrolledtext.ScrolledText(
             self.root, wrap="word", bg=PANEL, fg=TEXT,
             insertbackground=TEXT, relief="flat",
-            font=("Helvetica Neue", 18), padx=16, pady=16, spacing3=8,
+            font=self.caption_font, padx=16, pady=16, spacing3=8,
         )
         self.caption.pack(fill="both", expand=True, padx=20, pady=(4, 20))
         self.caption.configure(state="disabled")
+
+        # Drive responsive reflow + font scaling off the window size.
+        self.root.bind("<Configure>", self._on_resize)
+
+    def _layout_controls(self, wide):
+        """Single row when wide; two rows (mic on top) when narrow."""
+        if wide == self._controls_wide:
+            return
+        self._controls_wide = wide
+        c = self.controls
+        for w in (self.mic_label, self.mic_menu, self.dir_btn,
+                  self.meet_btn, self.play_check, self.toggle_btn):
+            w.grid_forget()
+        for col in range(6):
+            c.grid_columnconfigure(col, weight=0)
+
+        if wide:
+            self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
+            self.mic_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
+            self.dir_btn.grid(row=0, column=2, padx=(0, 8), pady=4)
+            self.meet_btn.grid(row=0, column=3, padx=(0, 16), pady=4)
+            self.play_check.grid(row=0, column=4, padx=(0, 12), pady=4, sticky="w")
+            self.toggle_btn.grid(row=0, column=5, pady=4, sticky="e")
+            c.grid_columnconfigure(1, weight=1)
+        else:
+            self.mic_label.grid(row=0, column=0, padx=(0, 8), pady=(4, 8), sticky="w")
+            self.mic_menu.grid(row=0, column=1, columnspan=3, pady=(4, 8), sticky="ew")
+            self.dir_btn.grid(row=1, column=0, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.meet_btn.grid(row=1, column=1, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.play_check.grid(row=1, column=2, padx=(0, 8), pady=(0, 4), sticky="w")
+            self.toggle_btn.grid(row=1, column=3, pady=(0, 4), sticky="e")
+            c.grid_columnconfigure(1, weight=1)
+            c.grid_columnconfigure(3, weight=1)
+
+    def _on_resize(self, event):
+        if event.widget is not self.root:
+            return
+        width = event.width
+        self._layout_controls(wide=width >= 720)
+        # Scale caption + header type to the window width (clamped).
+        span = max(0.0, min(1.0, (width - 560) / (1100 - 560)))
+        self.caption_font.configure(size=int(round(15 + span * 8)))   # 15–23
+        self.header_font.configure(size=int(round(17 + span * 7)))    # 17–24
 
     def _refresh_mics(self):
         self.mics = []  # list of (label, index)
@@ -462,17 +604,17 @@ class App:
         )
         self.translator.start()
         self.running = True
-        self.toggle_btn.configure(text="Stop", bg="#e0564f",
-                                  activebackground="#c8463f")
-        self.dir_btn.configure(state="disabled")
+        self.toggle_btn.set_text("Stop")
+        self.toggle_btn.set_style(fill=DANGER, hover_fill=DANGER_HOVER)
+        self.dir_btn.set_enabled(False)
 
     def _stop(self):
         if self.translator is not None:
             self.translator.stop()
         self.running = False
-        self.toggle_btn.configure(text="Start", bg=ACCENT,
-                                  activebackground="#3d76e0")
-        self.dir_btn.configure(state="normal")
+        self.toggle_btn.set_text("Start")
+        self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)
+        self.dir_btn.set_enabled(True)
 
     def _set_status(self, text, error=False):
         self.status_var.set(text)

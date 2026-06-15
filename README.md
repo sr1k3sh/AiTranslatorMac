@@ -40,6 +40,20 @@ powered by the Gemini Live API.
 
 ## Run
 
+### Click to launch (no terminal)
+
+- **Double-click `launch.command`** in Finder. On first run it sets up the
+  virtual environment and installs dependencies automatically, then opens the
+  app. (You still need PortAudio — see the Setup step above.)
+- Prefer a real app icon? **Double-click `build_app.command`** once to generate
+  **`TranslateAI.app`**, which you can then launch from Finder, the Dock, or
+  Launchpad (drag it to Applications if you like).
+
+> macOS Gatekeeper may warn the first time because these scripts are
+> unsigned — right-click → **Open** to confirm.
+
+### From the terminal
+
 ```sh
 source .venv/bin/activate
 python app.py
