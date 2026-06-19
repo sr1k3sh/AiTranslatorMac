@@ -137,8 +137,14 @@ class Translator:
 
     def stop(self):
         loop, stop_event = self._loop, self._stop_event
-        if loop is not None and stop_event is not None:
+        if loop is None or stop_event is None or loop.is_closed():
+            return
+        try:
             loop.call_soon_threadsafe(stop_event.set)
+        except RuntimeError:
+            # The loop finished (e.g. the session already ended) between the
+            # check above and this call — nothing left to stop.
+            pass
 
     def _thread_main(self):
         try:
