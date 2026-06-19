@@ -29,73 +29,71 @@ Two tabs:
 - The **Translate** button is still there if you want to force it immediately.
 - **Copy** puts the translation on your clipboard; **Clear** empties both sides.
 
-## Setup
+## Quick start
 
-1. **Install PortAudio** (needed by PyAudio):
-
-   ```sh
-   brew install portaudio
-   ```
-
-2. **Create a virtual environment and install dependencies:**
-
-   ```sh
-   python3.13 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-   > Requires Python 3.11+ (uses `asyncio.TaskGroup` / `ExceptionGroup`).
-
-3. **Set your Gemini API key** (or paste it into the app window):
-
-   ```sh
-   export GEMINI_API_KEY="your-key-here"
-   ```
-
-   Get a key at https://aistudio.google.com/apikey
-
-## Run
-
-### Guided setup (recommended)
-
-Run the interactive setup script from the repo and follow the three prompts:
+The easiest way — one command sets up everything and runs the app:
 
 ```sh
+git clone https://github.com/sr1k3sh/AiTranslatorMac.git
+cd AiTranslatorMac
 ./setup.sh
 ```
 
-1. **Install packages?** — `Y` installs the Python dependencies into a local
-   `.venv`; `N` exits.
-2. **Gemini API key** — if `GEMINI_API_KEY` is already set, it offers to skip
-   this step; otherwise paste your key (it shows where to get a free one), or
-   leave it blank to enter it in the app window later.
-3. **Run the app?** — `Y` launches TranslateAI; `N` exits.
+`setup.sh` walks you through three prompts:
 
-### Click to launch (no terminal)
+1. **Install packages?** — `Y` creates a local `.venv` and installs the Python
+   dependencies; `N` exits.
+   PyAudio needs **PortAudio**; if the install fails, run
+   `brew install portaudio` and re-run `./setup.sh`.
+2. **Gemini API key** — paste your key (it links to where you get a free one).
+   The key is **saved to a local `.env` file**, so you're asked **only once** —
+   on later runs it detects the saved key and lets you **skip** this step (or
+   replace it). Get a free key at <https://aistudio.google.com/apikey>.
+3. **Run the app?** — `Y` launches TranslateAI; `N` exits (run `./setup.sh`
+   again anytime).
 
-- **Double-click `launch.command`** in Finder. On first run it sets up the
-  virtual environment and installs dependencies automatically, then opens the
-  app. (You still need PortAudio — see the Setup step above.)
+> **Your API key is stored in `.env` in the project folder** — it's gitignored
+> (never committed) and the app reads it automatically however you launch it,
+> so you never have to `export` it or edit any settings by hand. To change it,
+> just run `./setup.sh` again and choose to replace it.
+
+> Requires **Python 3.11+** (uses `asyncio.TaskGroup` / `ExceptionGroup`).
+
+## Other ways to launch (no terminal)
+
+- **Double-click `launch.command`** in Finder — sets up the virtual environment
+  on first run, then opens the app.
 - Prefer a real app icon? **Double-click `build_app.command`** once to generate
-  **`TranslateAI.app`**, which you can then launch from Finder, the Dock, or
+  **`TranslateAI.app`**, which you can launch from Finder, the Dock, or
   Launchpad (drag it to Applications if you like).
+
+Both pick up the API key saved in `.env` automatically.
 
 > macOS Gatekeeper may warn the first time because these scripts are
 > unsigned — right-click → **Open** to confirm.
 
-### From the terminal
+## Manual setup (advanced)
+
+If you'd rather do it by hand instead of `setup.sh`:
 
 ```sh
+brew install portaudio                  # PyAudio needs this
+python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
+export GEMINI_API_KEY="your-key-here"   # or let setup.sh save it to .env
 python app.py
 ```
 
+## Using the app
+
 Pick your microphone, choose the **Input** and **Output** languages from the
-menus (default 日本語 → English), then click **Start** and speak (or play)
-audio. The original speech appears on the left and its translation on the
-right. Use **Clear** to wipe both panels and **Stop** to end the session —
-languages can only be changed while stopped.
+menus (default 日本語 → English, and the **⇄** button flips them), then click
+**Start** and speak (or play) audio. The original speech appears on the left
+and its translation on the right. Use **Clear** to wipe both panels and
+**Stop** to end the session — languages can only be changed while stopped.
+
+For typing/pasting text instead of speech, use the **Quick Translate** tab.
 
 ### Translating Google Meet (or any app audio)
 
