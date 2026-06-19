@@ -16,6 +16,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
 API_KEY_URL="https://aistudio.google.com/apikey"
+ENV_FILE="$DIR/.env"
+
+# Load a previously-saved key (from a prior run) unless one is already in the
+# environment, so re-runs can detect it and let you skip step 2.
+if [ -z "${GEMINI_API_KEY:-}" ] && [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
 
 # --- styling (no-op when output isn't a terminal) ---------------------------
 if [ -t 1 ]; then
@@ -94,7 +104,10 @@ prompt_for_key() {
   key="$(printf '%s' "$key" | tr -d '[:space:]')"
   if [ -n "$key" ]; then
     export GEMINI_API_KEY="$key"
-    echo "${GREEN}✓ API key set for this session.${RESET}"
+    # Persist it (gitignored) so future runs — and the app itself — find it.
+    printf "GEMINI_API_KEY='%s'\n" "$key" > "$ENV_FILE"
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+    echo "${GREEN}✓ API key saved to .env — you won't be asked again.${RESET}"
   else
     echo "${YELLOW}! No key provided — you can paste it into the app window later.${RESET}"
   fi

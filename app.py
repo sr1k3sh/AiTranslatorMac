@@ -1052,7 +1052,32 @@ class App:
         self.root.after(60, self._drain_events)
 
 
+def load_env_file():
+    """Load GEMINI_API_KEY from a local .env (written by setup.sh).
+
+    Only fills values not already in the environment, so an explicitly exported
+    key always wins. Lets the app find the saved key however it's launched.
+    """
+    if os.environ.get("GEMINI_API_KEY"):
+        return
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+
 def main():
+    load_env_file()
     root = tk.Tk()
     App(root)
     root.mainloop()
