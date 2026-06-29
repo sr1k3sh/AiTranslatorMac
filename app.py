@@ -521,6 +521,23 @@ class App:
         self._apply_languages()
         self._refresh_mics()
         self.root.after(60, self._drain_events)
+        # Restore the sound output device when the window is closed (otherwise
+        # quitting mid-session leaves macOS stuck on the switched device).
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Also catch macOS Cmd-Q / Dock → Quit, which can bypass the above.
+        try:
+            self.root.createcommand("::tk::mac::Quit", self._on_close)
+        except tk.TclError:
+            pass
+
+    def _on_close(self):
+        try:
+            if self.running:
+                self._stop()          # stops the session and restores output
+            else:
+                self._restore_output_device()
+        finally:
+            self.root.destroy()
 
     def _build_ui(self):
         # Fonts kept as objects so we can rescale them on resize.

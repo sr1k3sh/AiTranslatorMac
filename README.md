@@ -109,7 +109,8 @@ through a virtual device:
 
 > **No more diving into System Settings each time.** When you **Start**, the
 > app switches the macOS sound output to the device you chose, and switches it
-> **back** when you **Stop**. Your choice is remembered between launches.
+> **back** when you **Stop** or quit the app. Your choice is remembered between
+> launches. (If you don't want any switching, pick **"Don't change output"**.)
 > This needs the small helper `SwitchAudioSource` — `setup.sh` offers to
 > install it, or run `brew install switchaudio-osx` yourself. Without it, the
 > menu is disabled and you'd set the output manually (the old way).
