@@ -103,8 +103,16 @@ through a virtual device:
 1. `brew install --cask blackhole-2ch` then **reboot**.
 2. In **Audio MIDI Setup**, create a **Multi-Output Device** containing both
    **BlackHole 2ch** and your speakers (so you still hear the call).
-3. In **System Settings → Sound → Output**, select that Multi-Output Device.
-4. In TranslateAI, click **🎧 Meet** (auto-selects BlackHole) → **Start**.
+3. In TranslateAI, pick that device from the **Sound output** menu (it
+   auto-selects a Multi-Output Device if you have one), click **🎧 Meet**
+   (auto-selects BlackHole as input) → **Start**.
+
+> **No more diving into System Settings each time.** When you **Start**, the
+> app switches the macOS sound output to the device you chose, and switches it
+> **back** when you **Stop**. Your choice is remembered between launches.
+> This needs the small helper `SwitchAudioSource` — `setup.sh` offers to
+> install it, or run `brew install switchaudio-osx` yourself. Without it, the
+> menu is disabled and you'd set the output manually (the old way).
 
 The first run will trigger a macOS **microphone permission** prompt — allow it
 (System Settings → Privacy & Security → Microphone).

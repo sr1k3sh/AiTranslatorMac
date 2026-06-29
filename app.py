@@ -13,9 +13,12 @@ Requires GEMINI_API_KEY in your environment (or paste it into the window).
 """
 
 import os
+import json
 import queue
+import shutil
 import asyncio
 import threading
+import subprocess
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -68,6 +71,77 @@ def code_for_label(label: str) -> str:
         if name == label:
             return code
     return label
+
+
+# --- macOS sound-output switching (so you don't touch System Settings) ------
+#
+# Changing the system default output device needs CoreAudio; the standard tool
+# for that from a script is `SwitchAudioSource` (brew install switchaudio-osx).
+# Everything degrades gracefully to a no-op when it isn't installed.
+
+SWITCH_AUDIO = shutil.which("SwitchAudioSource")
+NO_OUTPUT_CHANGE = "— Don't change output —"
+
+
+def output_switching_available() -> bool:
+    return SWITCH_AUDIO is not None
+
+
+def list_output_devices() -> list:
+    """Names of the system audio output devices (empty if tool missing)."""
+    if not SWITCH_AUDIO:
+        return []
+    try:
+        out = subprocess.run([SWITCH_AUDIO, "-a", "-t", "output"],
+                             capture_output=True, text=True, timeout=5)
+        return [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def current_output_device():
+    if not SWITCH_AUDIO:
+        return None
+    try:
+        out = subprocess.run([SWITCH_AUDIO, "-c", "-t", "output"],
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def set_output_device(name) -> bool:
+    if not SWITCH_AUDIO or not name:
+        return False
+    try:
+        r = subprocess.run([SWITCH_AUDIO, "-s", name, "-t", "output"],
+                           capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+# --- Small JSON settings store (UI prefs; gitignored) -----------------------
+
+SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "settings.json")
+
+
+def load_settings() -> dict:
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(settings: dict) -> None:
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+    except OSError:
+        pass
 
 
 def build_config(play_audio: bool, target_language: str) -> types.LiveConnectConfig:
@@ -427,6 +501,11 @@ class App:
         self._trans_needs_para = False
         self._transcript_wide = None
 
+        # Persisted UI preferences (e.g. chosen sound-output device).
+        self.settings = load_settings()
+        # Output device we switched away from, to restore it on stop.
+        self._prev_output_device = None
+
         # Quick Translate: debounce timer + a sequence guard so a slow earlier
         # request can't overwrite a newer translation.
         self._quick_after_id = None
@@ -574,12 +653,86 @@ class App:
         self._controls_wide = None
         self._layout_controls(wide=True)
 
+        self._build_output_row(parent)
+
         # Transcript — original (left) and translation (right), side by side.
         self.transcript = tk.Frame(parent, bg=BG)
         self.transcript.pack(fill="both", expand=True, padx=20, pady=(4, 20))
         self.orig_panel, self.orig_text = self._build_panel("Original")
         self.trans_panel, self.trans_text = self._build_panel("Translation")
         self._layout_transcript(wide=True)
+
+    def _build_output_row(self, parent):
+        """Pick the system sound OUTPUT device (e.g. your Multi-Output Device).
+
+        On Start the app switches macOS to this device and restores your normal
+        one on Stop — so you never have to open System Settings each time.
+        """
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=20, pady=(0, 4))
+
+        tk.Label(row, text="Sound output", bg=BG, fg=MUTED,
+                 font=("Helvetica Neue", 11)).pack(side="left")
+
+        self.output_dev_var = tk.StringVar()
+        self.output_dev_menu = ttk.Combobox(
+            row, textvariable=self.output_dev_var, state="readonly", width=30)
+        self.output_dev_menu.pack(side="left", padx=(8, 8))
+        self.output_dev_menu.bind("<<ComboboxSelected>>",
+                                  self._on_output_device_change)
+
+        self._refresh_output_devices()
+
+        if not output_switching_available():
+            tk.Label(row, text="install: brew install switchaudio-osx",
+                     bg=BG, fg=MUTED, font=("Helvetica Neue", 10)).pack(
+                side="left")
+
+    def _refresh_output_devices(self):
+        devices = list_output_devices()
+        self.output_dev_menu["values"] = [NO_OUTPUT_CHANGE] + devices
+        saved = self.settings.get("output_device")
+        if saved and saved in devices:
+            choice = saved
+        else:
+            # Default to a Multi-Output Device if one exists.
+            choice = next(
+                (d for d in devices if "multi-output" in d.lower()),
+                NO_OUTPUT_CHANGE)
+        self.output_dev_var.set(choice)
+        if not output_switching_available():
+            self.output_dev_menu.configure(state="disabled")
+
+    def _on_output_device_change(self, _event=None):
+        choice = self.output_dev_var.get()
+        self.settings["output_device"] = "" if choice == NO_OUTPUT_CHANGE else choice
+        save_settings(self.settings)
+
+    def _selected_output_device(self):
+        choice = getattr(self, "output_dev_var", None)
+        choice = choice.get() if choice else ""
+        return None if choice in ("", NO_OUTPUT_CHANGE) else choice
+
+    def _apply_output_device(self):
+        """Switch macOS output to the chosen device, remembering the old one."""
+        target = self._selected_output_device()
+        if not target:
+            return
+        current = current_output_device()
+        if current == target:
+            self._prev_output_device = None  # already there; nothing to restore
+            return
+        if set_output_device(target):
+            self._prev_output_device = current
+            self._set_status(f"Output → {target}")
+        else:
+            self._set_status(f"Couldn't switch output to {target}", error=True)
+
+    def _restore_output_device(self):
+        """Put the output device back the way it was before we started."""
+        if self._prev_output_device:
+            set_output_device(self._prev_output_device)
+            self._prev_output_device = None
 
     def _build_quick_tab(self):
         """Text translation: type/paste on the left, see the result on the right."""
@@ -989,6 +1142,10 @@ class App:
             self._set_status("Set GEMINI_API_KEY first", error=True)
             return
 
+        # Switch macOS sound output to the chosen device (e.g. Multi-Output)
+        # so you hear the call while BlackHole feeds the translator.
+        self._apply_output_device()
+
         self._orig_needs_para = False
         self._trans_needs_para = False
         self.translator = Translator(
@@ -1009,6 +1166,7 @@ class App:
     def _stop(self):
         if self.translator is not None:
             self.translator.stop()
+        self._restore_output_device()
         self.running = False
         self.toggle_btn.set_text("Start")
         self.toggle_btn.set_style(fill=ACCENT, hover_fill=ACCENT_HOVER)

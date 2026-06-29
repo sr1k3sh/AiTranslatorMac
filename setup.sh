@@ -77,6 +77,18 @@ if ask_yn "Install the Python dependencies now?"; then
     exit 1
   fi
   echo "${GREEN}✓ Packages installed.${RESET}"
+
+  # Optional: SwitchAudioSource lets the app switch the macOS sound output
+  # device for you (so you don't set the Multi-Output Device by hand).
+  if ! command -v SwitchAudioSource >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      if ask_yn "  Install 'switchaudio-osx' so the app can switch sound output for you?"; then
+        brew install switchaudio-osx || echo "${YELLOW}  (install failed — you can do it later)${RESET}"
+      fi
+    else
+      echo "${DIM}  Tip: 'brew install switchaudio-osx' lets the app switch sound output automatically.${RESET}"
+    fi
+  fi
 else
   echo "${DIM}Skipping install. Exiting.${RESET}"
   exit 0
